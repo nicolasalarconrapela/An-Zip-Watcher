@@ -604,34 +604,48 @@ class ZipWatcherApp(tk.Tk):
         split = ttk.PanedWindow(act, orient="vertical")
         split.pack(fill="both", expand=True)
 
-        # Logs text
+        # Logs text with scrollbars
         logs_frame = ttk.Frame(split, style="Card.TFrame")
+        
+        # Scrollbars
+        scrollbar_y = ttk.Scrollbar(logs_frame)
+        scrollbar_y.pack(side="right", fill="y")
+        scrollbar_x = ttk.Scrollbar(logs_frame, orient="horizontal")
+        scrollbar_x.pack(side="bottom", fill="x")
+        
         self.txt_logs = tk.Text(
             logs_frame,
             height=16,
-            wrap="word",
+            wrap="none",
             bg="#0b1220",
             fg="#e5e7eb",
             insertbackground="#e5e7eb",
             relief="flat",
             padx=10,
-            pady=8
+            pady=8,
+            yscrollcommand=scrollbar_y.set,
+            xscrollcommand=scrollbar_x.set,
+            font=("Courier New", 10)
         )
-        self.txt_logs.pack(fill="both", expand=True)
+        self.txt_logs.pack(side="left", fill="both", expand=True)
         self.txt_logs.configure(state="disabled")
+        
+        scrollbar_y.config(command=self.txt_logs.yview)
+        scrollbar_x.config(command=self.txt_logs.xview)
 
-        # Tags
-        self.txt_logs.tag_config("INFO", foreground="#93c5fd")
-        self.txt_logs.tag_config("OK", foreground="#86efac")
-        self.txt_logs.tag_config("WARN", foreground="#fde68a")
-        self.txt_logs.tag_config("ERROR", foreground="#fca5a5")
-        self.txt_logs.tag_config("START", foreground="#86efac")
-        self.txt_logs.tag_config("STOP", foreground="#fca5a5")
-        self.txt_logs.tag_config("ZIP", foreground="#c4b5fd")
-        self.txt_logs.tag_config("FOLDER", foreground="#67e8f9")
-        self.txt_logs.tag_config("CLEAN", foreground="#a7f3d0")
-        self.txt_logs.tag_config("TRASH", foreground="#a7f3d0")
-        self.txt_logs.tag_config("SEARCH", foreground="#fcd34d")
+        # Tags with improved colors and styling
+        self.txt_logs.tag_config("INFO", foreground="#60a5fa", background="#0f172a")
+        self.txt_logs.tag_config("OK", foreground="#4ade80", background="#0b4620")
+        self.txt_logs.tag_config("WARN", foreground="#facc15", background="#4a3c0a")
+        self.txt_logs.tag_config("ERROR", foreground="#f87171", background="#7f1d1d")
+        self.txt_logs.tag_config("START", foreground="#4ade80", background="#0b4620", font=("Courier New", 10, "bold"))
+        self.txt_logs.tag_config("STOP", foreground="#f87171", background="#7f1d1d", font=("Courier New", 10, "bold"))
+        self.txt_logs.tag_config("ZIP", foreground="#a78bfa", background="#1e1b4b")
+        self.txt_logs.tag_config("FOLDER", foreground="#06b6d4", background="#082f49")
+        self.txt_logs.tag_config("CLEAN", foreground="#6ee7b7", background="#0d3b2b")
+        self.txt_logs.tag_config("TRASH", foreground="#6ee7b7", background="#0d3b2b")
+        self.txt_logs.tag_config("SEARCH", foreground="#fbbf24", background="#451407", font=("Courier New", 10, "bold"))
+        self.txt_logs.tag_config("SEPARATOR", foreground="#374151", background="#0b1220")
 
         # Recent events table
         table_frame = ttk.Frame(split, style="Card.TFrame")
@@ -1149,14 +1163,23 @@ class ZipWatcherApp(tk.Tk):
             self.tree.delete(iid)
 
     def copy_logs(self):
+        """Copia los logs al portapapeles con formato."""
         self.txt_logs.configure(state="normal")
         text = self.txt_logs.get("1.0", "end-1c")
         self.txt_logs.configure(state="disabled")
+        
+        if not text.strip():
+            messagebox.showwarning("Sin logs", "No hay logs para copiar.")
+            return
+            
         self.clipboard_clear()
         self.clipboard_append(text)
-        self.emit("OK", "Logs copiados al portapapeles.")
+        
+        lines = len(text.split('\n'))
+        self.emit("OK", f"Logs copiados al portapapeles ({lines} líneas).")
 
     def export_logs(self):
+        """Exporta los logs a un archivo con encabezado informativo."""
         path = filedialog.asksaveasfilename(
             title="Exportar logs",
             defaultextension=".txt",
@@ -1164,16 +1187,45 @@ class ZipWatcherApp(tk.Tk):
         )
         if not path:
             return
-
-        self.txt_logs.configure(state="normal")
-        text = self.txt_logs.get("1.0", "end-1c")
-        self.txt_logs.configure(state="disabled")
-
+        
         try:
-            Path(path).write_text(text, encoding="utf-8")
+            self.txt_logs.configure(state="normal")
+            text = self.txt_logs.get("1.0", "end-1c")
+            self.txt_logs.configure(state="disabled")
+            
+            # Agregar encabezado
+            header = f"""
+================================================================================
+                         ZIP WATCHER - REPORTE DE LOGS
+================================================================================
+Fecha:      {time.strftime("%Y-%m-%d %H:%M:%S")}
+Aplicación: ZIP Watcher v2.0
+Directorio: {self.settings.get('watch_dir', 'N/A')}
+================================================================================
+
+"""
+            
+            # Agregar resumen
+            summary = f"""
+RESUMEN:
+  - INFO:   {self._count_info:5} eventos
+  - OK:     {self._count_ok:5} eventos
+  - WARN:   {self._count_warn:5} eventos
+  - ERROR:  {self._count_error:5} eventos
+  - Total:  {sum([self._count_info, self._count_ok, self._count_warn, self._count_error]):5} eventos
+
+LOG DETALLADO:
+================================================================================
+
+"""
+            
+            content = header + summary + text + "\n\n" + "="*80 + "\nFin del reporte\n"
+            
+            Path(path).write_text(content, encoding="utf-8")
             self.emit("OK", f"Logs exportados a {path}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo exportar: {e}")
+            self.emit("ERROR", f"Error exportando logs: {e}")
 
     def search_logs(self):
         q = (self.search_var.get() or "").strip().lower()
@@ -1240,7 +1292,9 @@ class ZipWatcherApp(tk.Tk):
     def _append_log_to_text(self, ev: LogEvent):
         ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
         lvl = ev.level.upper()
-        line = f"{ts} {emoji(lvl)} [{lvl}] {ev.msg}\n"
+        
+        # Mejor formato con separador y más espaciado
+        line = f"[{ts}] {lvl:8} | {ev.msg}\n"
 
         self.txt_logs.configure(state="normal")
         start = self.txt_logs.index("end-1c")

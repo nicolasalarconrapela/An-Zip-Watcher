@@ -31,22 +31,22 @@ def print_header(msg):
 
 def print_success(msg):
     """Print a success message"""
-    print(f"{Colors.GREEN}✓ {msg}{Colors.END}")
+    print(f"{Colors.GREEN}[OK] {msg}{Colors.END}")
 
 
 def print_error(msg):
     """Print an error message"""
-    print(f"{Colors.RED}✗ {msg}{Colors.END}")
+    print(f"{Colors.RED}[ERROR] {msg}{Colors.END}")
 
 
 def print_warning(msg):
     """Print a warning message"""
-    print(f"{Colors.YELLOW}⚠ {msg}{Colors.END}")
+    print(f"{Colors.YELLOW}[WARN] {msg}{Colors.END}")
 
 
 def print_info(msg):
     """Print an info message"""
-    print(f"{Colors.BLUE}ℹ {msg}{Colors.END}")
+    print(f"{Colors.BLUE}[INFO] {msg}{Colors.END}")
 
 
 def check_dependencies():
@@ -78,8 +78,13 @@ def clean_build_directories():
     for dir_name in dirs_to_clean:
         dir_path = Path(dir_name)
         if dir_path.exists():
-            shutil.rmtree(dir_path)
-            print_success(f"Removed {dir_name}/")
+            try:
+                shutil.rmtree(dir_path)
+                print_success(f"Removed {dir_name}/")
+            except PermissionError:
+                print_warning(f"Could not remove {dir_name}/ (in use) - continuing...")
+            except Exception as e:
+                print_warning(f"Error removing {dir_name}/: {e}")
         else:
             print_info(f"{dir_name}/ not found (skipped)")
 
