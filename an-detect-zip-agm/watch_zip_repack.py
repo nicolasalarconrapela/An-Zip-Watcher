@@ -1,37 +1,55 @@
-import argparse
 import json
+import queue
+import threading
 import time
 import shutil
 import zipfile
 from pathlib import Path
+import sys
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+
+# =========================
+# Paths & Settings
+# =========================
+
+def app_dir() -> Path:
+    # Directorio donde está el .py o el .exe (PyInstaller)
+    return Path(sys.argv[0]).resolve().parent
+
+SETTINGS_PATH = app_dir() / "settings.json"
+
+DEFAULT_SETTINGS = {
+    "watch_dir": "",
+    "extract_subdir": "extracted",
+    "output_subdir": "output",
+    "processed_subdir": "processed",
+    "poll_settle_seconds": 1.0,
+    "max_settle_tries": 30
+}
 
 
-DEFAULT_CONFIG_PATH = Path(__file__).with_name("settings.json")
-
-def load_settings(config_path: Path) -> dict:
-    if config_path.exists():
+def load_settings() -> dict:
+    if SETTINGS_PATH.exists():
         try:
-            with config_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                merged = DEFAULT_SETTINGS.copy()
+                merged.update(data)
+                return merged
         except Exception:
-            return {}
-    return {}
+            pass
+    return DEFAULT_SETTINGS.copy()
 
 
-def resolve_watch_dir(cli_watch_dir: str | None, settings: dict) -> Path:
-    watch_dir = cli_watch_dir or settings.get("watch_dir")
+def save_settings(settings: dict) -> None:
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    if not watch_dir:
-        raise RuntimeError(
-            "No se ha definido watch_dir. "
-            "Es obligatorio especificar --watch-dir o settings.json"
-        )
 
-    return Path(watch_dir).expanduser().resolve()
+# =========================
+# Core ZIP processing
+# =========================
 
 def wait_until_file_stable(file_path: Path, poll_seconds: float, max_tries: int) -> None:
     last_size = -1
@@ -39,22 +57,11 @@ def wait_until_file_stable(file_path: Path, poll_seconds: float, max_tries: int)
         if not file_path.exists():
             time.sleep(poll_seconds)
             continue
-
         size = file_path.stat().st_size
         if size == last_size and size > 0:
             return
-
         last_size = size
         time.sleep(poll_seconds)
-
-
-def zip_directory(src_dir: Path, dest_zip: Path) -> None:
-    dest_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in src_dir.rglob("*"):
-            if path.is_file():
-                arcname = path.relative_to(src_dir)
-                zf.write(path, arcname.as_posix())
 
 
 def safe_move(src: Path, dest: Path) -> Path:
@@ -66,18 +73,26 @@ def safe_move(src: Path, dest: Path) -> Path:
     return final_dest
 
 
-def process_zip(
-    zip_path: Path,
-    extract_root: Path,
-    output_dir: Path,
-    processed_dir: Path,
-    poll_seconds: float,
-    max_tries: int,
-) -> None:
-    extract_root.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    processed_dir.mkdir(parents=True, exist_ok=True)
+def zip_directory(src_dir: Path, dest_zip: Path) -> None:
+    dest_zip.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in src_dir.rglob("*"):
+            if p.is_file():
+                zf.write(p, p.relative_to(src_dir).as_posix())
 
+
+def process_zip(zip_path: Path, watch_dir: Path, settings: dict, log) -> None:
+    poll_seconds = float(settings.get("poll_settle_seconds", 1.0))
+    max_tries = int(settings.get("max_settle_tries", 30))
+
+    extract_root = watch_dir / (settings.get("extract_subdir") or "extracted")
+    output_dir = watch_dir / (settings.get("output_subdir") or "output")
+    processed_dir = watch_dir / (settings.get("processed_subdir") or "processed")
+
+    for d in (extract_root, output_dir, processed_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    log(f"Detectado ZIP: {zip_path.name}")
     wait_until_file_stable(zip_path, poll_seconds, max_tries)
 
     # Validar ZIP
@@ -85,136 +100,268 @@ def process_zip(
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.testzip()
     except Exception as e:
-        print(f"[WARN] ZIP inválido: {zip_path.name} -> {e}")
+        log(f"[WARN] ZIP inválido o no listo: {zip_path.name} -> {e}")
         return
 
+    # Extraer en extracted/<stem> (si existe, añade timestamp)
     extract_dir = extract_root / zip_path.stem
     if extract_dir.exists():
         extract_dir = extract_root / f"{zip_path.stem}__{int(time.time())}"
 
-    # 1) Descomprimir
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(extract_dir)
-        print(f"[OK] Descomprimido: {zip_path.name} -> {extract_dir}")
+        log(f"[OK] Descomprimido en: {extract_dir}")
     except Exception as e:
-        print(f"[ERROR] Error al descomprimir {zip_path.name}: {e}")
+        log(f"[ERROR] Error descomprimiendo {zip_path.name}: {e}")
         return
 
-    # 2) Tomar la PRIMERA carpeta dentro del nodo descomprimido
-    folders = sorted([p for p in extract_dir.iterdir() if p.is_dir()])
+    # Tomar primera carpeta dentro del nodo descomprimido
+    folders = sorted([p for p in extract_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
     if not folders:
-        print(f"[WARN] {zip_path.name} no contiene carpetas. No se comprime nada.")
+        log(f"[WARN] No hay carpetas dentro de {extract_dir}. No se comprime nada.")
         return
 
     target_folder = folders[0]
-
-    # 3) Comprimir SOLO esa carpeta
     out_zip = output_dir / f"{target_folder.name}.zip"
     if out_zip.exists():
         out_zip = output_dir / f"{target_folder.name}__{int(time.time())}.zip"
 
     try:
         zip_directory(target_folder, out_zip)
-        print(f"[OK] Comprimido: {out_zip} (desde {target_folder})")
+        log(f"[OK] Creado ZIP: {out_zip.name} (desde {target_folder.name})")
     except Exception as e:
-        print(f"[ERROR] Error al comprimir {target_folder}: {e}")
+        log(f"[ERROR] Error comprimiendo {target_folder}: {e}")
         return
 
-    # 4) Mover ZIP original
+    # Mover original a processed
     try:
         moved = safe_move(zip_path, processed_dir / zip_path.name)
-        print(f"[OK] ZIP original movido a: {moved}")
+        log(f"[OK] Original movido a: {moved}")
     except Exception as e:
-        print(f"[WARN] No se pudo mover el ZIP original {zip_path.name}: {e}")
+        log(f"[WARN] No se pudo mover el original: {e}")
 
 
-class ZipHandler(FileSystemEventHandler):
-    def __init__(self, extract_root: Path, output_dir: Path, processed_dir: Path, poll_seconds: float, max_tries: int):
-        self.extract_root = extract_root
-        self.output_dir = output_dir
-        self.processed_dir = processed_dir
-        self.poll_seconds = poll_seconds
-        self.max_tries = max_tries
+# =========================
+# Watcher Thread (polling)
+# =========================
 
-    def on_created(self, event):
-        if event.is_directory:
+class WatcherThread(threading.Thread):
+    """
+    Watcher por polling (no requiere watchdog).
+    Ventaja: más fácil de empaquetar y extremadamente estable en Windows.
+    """
+    def __init__(self, settings_getter, log, stop_event: threading.Event):
+        super().__init__(daemon=True)
+        self.settings_getter = settings_getter
+        self.log = log
+        self.stop_event = stop_event
+        self.seen = set()
+
+    def run(self):
+        self.log("Watcher iniciado.")
+        while not self.stop_event.is_set():
+            settings = self.settings_getter()
+            watch_dir_raw = (settings.get("watch_dir") or "").strip()
+            if not watch_dir_raw:
+                # Si el usuario borra la ruta mientras está corriendo, dormimos y seguimos.
+                time.sleep(0.5)
+                continue
+
+            watch_dir = Path(watch_dir_raw).expanduser().resolve()
+            watch_dir.mkdir(parents=True, exist_ok=True)
+
+            # Escaneo no recursivo: solo zips en la raíz de watch_dir
+            try:
+                for p in watch_dir.iterdir():
+                    if self.stop_event.is_set():
+                        break
+                    if p.is_file() and p.suffix.lower() == ".zip":
+                        # Evitar reprocesar: usamos ruta+mtime+size como fingerprint simple
+                        try:
+                            fp = (str(p), p.stat().st_mtime_ns, p.stat().st_size)
+                        except Exception:
+                            continue
+                        if fp in self.seen:
+                            continue
+                        self.seen.add(fp)
+                        process_zip(p, watch_dir, settings, self.log)
+            except Exception as e:
+                self.log(f"[WARN] Error leyendo directorio: {e}")
+
+            time.sleep(0.5)
+
+        self.log("Watcher detenido.")
+
+
+# =========================
+# GUI
+# =========================
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("ZIP Watcher")
+        self.geometry("760x520")
+
+        self.log_queue = queue.Queue()
+        self.settings = load_settings()
+
+        self.stop_event = threading.Event()
+        self.worker = None
+
+        self._build_ui()
+        self._load_to_form()
+        self._tick_logs()
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 8}
+
+        frm = ttk.Frame(self)
+        frm.pack(fill="both", expand=True)
+
+        # --- Config
+        config_box = ttk.LabelFrame(frm, text="Configuración")
+        config_box.pack(fill="x", **pad)
+
+        self.watch_dir_var = tk.StringVar()
+        self.poll_var = tk.StringVar()
+        self.tries_var = tk.StringVar()
+
+        row1 = ttk.Frame(config_box)
+        row1.pack(fill="x", padx=10, pady=6)
+        ttk.Label(row1, text="Carpeta de escucha:").pack(side="left")
+        self.watch_entry = ttk.Entry(row1, textvariable=self.watch_dir_var)
+        self.watch_entry.pack(side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row1, text="Explorar...", command=self.browse_folder).pack(side="left")
+
+        row2 = ttk.Frame(config_box)
+        row2.pack(fill="x", padx=10, pady=6)
+        ttk.Label(row2, text="poll_settle_seconds:").pack(side="left")
+        ttk.Entry(row2, width=10, textvariable=self.poll_var).pack(side="left", padx=8)
+        ttk.Label(row2, text="max_settle_tries:").pack(side="left", padx=(12, 0))
+        ttk.Entry(row2, width=10, textvariable=self.tries_var).pack(side="left", padx=8)
+
+        row3 = ttk.Frame(config_box)
+        row3.pack(fill="x", padx=10, pady=6)
+        ttk.Button(row3, text="Guardar configuración", command=self.save_from_form).pack(side="left")
+
+        # --- Controls
+        ctrl_box = ttk.LabelFrame(frm, text="Control")
+        ctrl_box.pack(fill="x", **pad)
+
+        self.status_var = tk.StringVar(value="Parado")
+        self.toggle_btn = ttk.Button(ctrl_box, text="Iniciar", command=self.toggle)
+        self.toggle_btn.pack(side="left", padx=10, pady=10)
+
+        ttk.Label(ctrl_box, text="Estado:").pack(side="left", padx=(15, 5))
+        ttk.Label(ctrl_box, textvariable=self.status_var).pack(side="left")
+
+        # --- Logs
+        log_box = ttk.LabelFrame(frm, text="Logs")
+        log_box.pack(fill="both", expand=True, **pad)
+
+        self.log_text = tk.Text(log_box, height=16, wrap="word")
+        self.log_text.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log_text.configure(state="disabled")
+
+    def _load_to_form(self):
+        self.watch_dir_var.set(self.settings.get("watch_dir", ""))
+        self.poll_var.set(str(self.settings.get("poll_settle_seconds", 1.0)))
+        self.tries_var.set(str(self.settings.get("max_settle_tries", 30)))
+
+    def browse_folder(self):
+        path = filedialog.askdirectory(title="Selecciona carpeta de escucha")
+        if path:
+            self.watch_dir_var.set(path)
+
+    def save_from_form(self):
+        watch_dir = (self.watch_dir_var.get() or "").strip()
+        if not watch_dir:
+            messagebox.showerror("Error", "La carpeta de escucha es obligatoria (por seguridad).")
             return
-        path = Path(event.src_path)
-        if path.suffix.lower() == ".zip":
-            process_zip(
-                path,
-                self.extract_root,
-                self.output_dir,
-                self.processed_dir,
-                self.poll_seconds,
-                self.max_tries,
-            )
 
-    def on_moved(self, event):
-        if event.is_directory:
+        try:
+            poll = float(self.poll_var.get().strip())
+            tries = int(self.tries_var.get().strip())
+            if poll <= 0:
+                raise ValueError("poll_settle_seconds debe ser > 0")
+            if tries <= 0:
+                raise ValueError("max_settle_tries debe ser > 0")
+        except Exception as e:
+            messagebox.showerror("Error", f"Parámetros inválidos: {e}")
             return
-        path = Path(event.dest_path)
-        if path.suffix.lower() == ".zip":
-            process_zip(
-                path,
-                self.extract_root,
-                self.output_dir,
-                self.processed_dir,
-                self.poll_seconds,
-                self.max_tries,
-            )
 
+        self.settings["watch_dir"] = watch_dir
+        self.settings["poll_settle_seconds"] = poll
+        self.settings["max_settle_tries"] = tries
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Escucha un directorio, descomprime ZIPs y comprime la primera carpeta resultante."
-    )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Ruta a settings.json")
-    parser.add_argument("--watch-dir", default=None, help="Carpeta a escuchar")
-    args = parser.parse_args()
+        save_settings(self.settings)
+        self.log(f"[OK] Config guardada en {SETTINGS_PATH}")
 
-    settings = load_settings(Path(args.config))
-    try:
-        watch_dir = resolve_watch_dir(args.watch_dir, settings)
-    except RuntimeError as e:
-        print(f"[FATAL] {e}")
-        return
+    def settings_getter(self):
+        # el thread leerá esta config en caliente
+        return dict(self.settings)
 
-    extract_root = watch_dir / (settings.get("extract_subdir") or "extracted")
-    output_dir = watch_dir / (settings.get("output_subdir") or "output")
-    processed_dir = watch_dir / (settings.get("processed_subdir") or "processed")
+    def toggle(self):
+        if self.worker and self.worker.is_alive():
+            # Stop
+            self.stop_event.set()
+            self.status_var.set("Deteniendo...")
+            self.toggle_btn.configure(state="disabled")
+            self.after(200, self._join_worker)
+        else:
+            # Start
+            if not (self.settings.get("watch_dir") or "").strip():
+                # Si no está guardada aún, intenta guardarla desde el formulario
+                self.save_from_form()
+                if not (self.settings.get("watch_dir") or "").strip():
+                    return
 
-    poll_seconds = float(settings.get("poll_settle_seconds", 1.0))
-    max_tries = int(settings.get("max_settle_tries", 30))
+            self.stop_event.clear()
+            self.worker = WatcherThread(self.settings_getter, self.log, self.stop_event)
+            self.worker.start()
+            self.status_var.set("En ejecución")
+            self.toggle_btn.configure(text="Parar")
 
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    extract_root.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    processed_dir.mkdir(parents=True, exist_ok=True)
+    def _join_worker(self):
+        if self.worker and self.worker.is_alive():
+            # sigue parando
+            self.after(200, self._join_worker)
+            return
 
-    observer = Observer()
-    observer.schedule(
-        ZipHandler(extract_root, output_dir, processed_dir, poll_seconds, max_tries),
-        str(watch_dir),
-        recursive=False,
-    )
-    observer.start()
+        self.toggle_btn.configure(state="normal", text="Iniciar")
+        self.status_var.set("Parado")
+        self.log("[OK] Watcher parado.")
 
-    print(f"Escuchando en:     {watch_dir}")
-    print(f"Descomprime en:    {extract_root}")
-    print(f"ZIP generado en:   {output_dir}")
-    print(f"ZIP procesados:    {processed_dir}")
-    print("Regla:             se comprime SOLO la primera carpeta encontrada")
-    print("Ctrl+C para salir.")
+    def log(self, msg: str):
+        # Encola para pintar en hilo UI
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_queue.put(f"{timestamp} {msg}")
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+    def _tick_logs(self):
+        try:
+            while True:
+                line = self.log_queue.get_nowait()
+                self.log_text.configure(state="normal")
+                self.log_text.insert("end", line + "\n")
+                self.log_text.see("end")
+                self.log_text.configure(state="disabled")
+        except queue.Empty:
+            pass
+
+        self.after(150, self._tick_logs)
+
+    def on_close(self):
+        if self.worker and self.worker.is_alive():
+            if not messagebox.askyesno("Salir", "El watcher está ejecutándose. ¿Parar y salir?"):
+                return
+            self.stop_event.set()
+        self.destroy()
 
 
 if __name__ == "__main__":
-    main()
+    app = App()
+    app.mainloop()
