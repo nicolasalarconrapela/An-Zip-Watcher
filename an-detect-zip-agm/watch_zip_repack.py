@@ -18,6 +18,7 @@ def app_dir() -> Path:
     # Directorio donde está el .py o el .exe (PyInstaller)
     return Path(sys.argv[0]).resolve().parent
 
+
 SETTINGS_PATH = app_dir() / "settings.json"
 
 DEFAULT_SETTINGS = {
@@ -149,7 +150,7 @@ def process_zip(zip_path: Path, watch_dir: Path, settings: dict, log) -> None:
 class WatcherThread(threading.Thread):
     """
     Watcher por polling (no requiere watchdog).
-    Ventaja: más fácil de empaquetar y extremadamente estable en Windows.
+    Ventaja: más fácil de empaquetar y estable en Windows.
     """
     def __init__(self, settings_getter, log, stop_event: threading.Event):
         super().__init__(daemon=True)
@@ -164,20 +165,17 @@ class WatcherThread(threading.Thread):
             settings = self.settings_getter()
             watch_dir_raw = (settings.get("watch_dir") or "").strip()
             if not watch_dir_raw:
-                # Si el usuario borra la ruta mientras está corriendo, dormimos y seguimos.
                 time.sleep(0.5)
                 continue
 
             watch_dir = Path(watch_dir_raw).expanduser().resolve()
             watch_dir.mkdir(parents=True, exist_ok=True)
 
-            # Escaneo no recursivo: solo zips en la raíz de watch_dir
             try:
                 for p in watch_dir.iterdir():
                     if self.stop_event.is_set():
                         break
                     if p.is_file() and p.suffix.lower() == ".zip":
-                        # Evitar reprocesar: usamos ruta+mtime+size como fingerprint simple
                         try:
                             fp = (str(p), p.stat().st_mtime_ns, p.stat().st_size)
                         except Exception:
@@ -202,7 +200,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("ZIP Watcher")
-        self.geometry("760x520")
+        self.geometry("820x560")
 
         self.log_queue = queue.Queue()
         self.settings = load_settings()
@@ -216,6 +214,29 @@ class App(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    # ---- Helpers for dirs
+    def _watch_dir(self) -> Path | None:
+        wd = (self.settings.get("watch_dir") or "").strip()
+        if not wd:
+            return None
+        return Path(wd).expanduser().resolve()
+
+    def _output_dir(self) -> Path | None:
+        wd = self._watch_dir()
+        if wd is None:
+            return None
+        return wd / (self.settings.get("output_subdir") or "output")
+
+    def _trash_dir(self) -> Path | None:
+        wd = self._watch_dir()
+        if wd is None:
+            return None
+        return wd / "Trash"
+
+    def _is_running(self) -> bool:
+        return bool(self.worker and self.worker.is_alive())
+
+    # ---- UI
     def _build_ui(self):
         pad = {"padx": 10, "pady": 8}
 
@@ -253,8 +274,13 @@ class App(tk.Tk):
         ctrl_box.pack(fill="x", **pad)
 
         self.status_var = tk.StringVar(value="Parado")
+
         self.toggle_btn = ttk.Button(ctrl_box, text="Iniciar", command=self.toggle)
         self.toggle_btn.pack(side="left", padx=10, pady=10)
+
+        # NUEVO: botón Limpiar (mueve output/* a watch_dir/Trash)
+        self.clean_btn = ttk.Button(ctrl_box, text="Limpiar output → Trash", command=self.clean_output_to_trash)
+        self.clean_btn.pack(side="left", padx=10, pady=10)
 
         ttk.Label(ctrl_box, text="Estado:").pack(side="left", padx=(15, 5))
         ttk.Label(ctrl_box, textvariable=self.status_var).pack(side="left")
@@ -263,7 +289,7 @@ class App(tk.Tk):
         log_box = ttk.LabelFrame(frm, text="Logs")
         log_box.pack(fill="both", expand=True, **pad)
 
-        self.log_text = tk.Text(log_box, height=16, wrap="word")
+        self.log_text = tk.Text(log_box, height=18, wrap="word")
         self.log_text.pack(fill="both", expand=True, padx=10, pady=10)
         self.log_text.configure(state="disabled")
 
@@ -306,16 +332,16 @@ class App(tk.Tk):
         return dict(self.settings)
 
     def toggle(self):
-        if self.worker and self.worker.is_alive():
+        if self._is_running():
             # Stop
             self.stop_event.set()
             self.status_var.set("Deteniendo...")
             self.toggle_btn.configure(state="disabled")
+            self.clean_btn.configure(state="disabled")
             self.after(200, self._join_worker)
         else:
             # Start
             if not (self.settings.get("watch_dir") or "").strip():
-                # Si no está guardada aún, intenta guardarla desde el formulario
                 self.save_from_form()
                 if not (self.settings.get("watch_dir") or "").strip():
                     return
@@ -325,19 +351,73 @@ class App(tk.Tk):
             self.worker.start()
             self.status_var.set("En ejecución")
             self.toggle_btn.configure(text="Parar")
+            self.clean_btn.configure(state="disabled")  # Evitar limpiar mientras corre
 
     def _join_worker(self):
         if self.worker and self.worker.is_alive():
-            # sigue parando
             self.after(200, self._join_worker)
             return
 
         self.toggle_btn.configure(state="normal", text="Iniciar")
+        self.clean_btn.configure(state="normal")
         self.status_var.set("Parado")
         self.log("[OK] Watcher parado.")
 
+    # =========================
+    # NUEVO: Limpiar output -> Trash
+    # =========================
+    def clean_output_to_trash(self):
+        if self._is_running():
+            messagebox.showwarning("En ejecución", "Para seguridad, detén el watcher antes de limpiar.")
+            return
+
+        wd = self._watch_dir()
+        if wd is None:
+            messagebox.showerror("Error", "Define y guarda una carpeta de escucha antes de limpiar.")
+            return
+
+        output_dir = self._output_dir()
+        trash_dir = self._trash_dir()
+        assert output_dir is not None and trash_dir is not None
+
+        if not output_dir.exists():
+            messagebox.showinfo("Sin output", f"No existe la carpeta output: {output_dir}")
+            return
+
+        # Contenido a mover
+        items = [p for p in output_dir.iterdir()]
+        if not items:
+            messagebox.showinfo("Sin archivos", "No hay archivos en output para mover.")
+            return
+
+        if not messagebox.askyesno(
+            "Confirmar limpieza",
+            f"Se moverán {len(items)} elementos de:\n{output_dir}\n\nhacia:\n{trash_dir}\n\n¿Continuar?"
+        ):
+            return
+
+        # En Trash, creamos un subdirectorio con timestamp para evitar colisiones
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        batch_dir = trash_dir / f"output_{stamp}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+
+        moved_count = 0
+        for p in items:
+            try:
+                dest = batch_dir / p.name
+                # Si colisiona, añade timestamp
+                if dest.exists():
+                    dest = batch_dir / f"{p.stem}__{int(time.time())}{p.suffix}"
+                shutil.move(str(p), str(dest))
+                moved_count += 1
+            except Exception as e:
+                self.log(f"[WARN] No se pudo mover {p.name}: {e}")
+
+        self.log(f"[OK] Limpieza completada. Movidos {moved_count}/{len(items)} a {batch_dir}")
+        messagebox.showinfo("Limpieza completada", f"Movidos {moved_count}/{len(items)} elementos a:\n{batch_dir}")
+
+    # ---- Logging
     def log(self, msg: str):
-        # Encola para pintar en hilo UI
         timestamp = time.strftime("%H:%M:%S")
         self.log_queue.put(f"{timestamp} {msg}")
 
@@ -355,7 +435,7 @@ class App(tk.Tk):
         self.after(150, self._tick_logs)
 
     def on_close(self):
-        if self.worker and self.worker.is_alive():
+        if self._is_running():
             if not messagebox.askyesno("Salir", "El watcher está ejecutándose. ¿Parar y salir?"):
                 return
             self.stop_event.set()
