@@ -2,7 +2,44 @@
 """
 Release automation script for AN-DETECT-ZIP-AGM
 
-Automates the release process: version bump, changelog, build, and git operations.
+Automates the complete release process: version bump, build, and git operations.
+
+Usage Examples:
+    # Quick release (patch version)
+    python release.py patch
+    
+    # Preview before releasing
+    python release.py minor --dry-run
+    
+    # Release without building executable
+    python release.py patch --skip-build
+    
+    # Release without git operations
+    python release.py minor --skip-git
+    
+    # Combine options
+    python release.py major --skip-build --dry-run
+
+Release Types:
+    patch: Bug fixes (1.0.0 → 1.0.1)
+    minor: New features (1.0.0 → 1.1.0)
+    major: Breaking changes (1.0.0 → 2.0.0)
+
+Automatic Steps:
+    1. Bumps version using version_manager.py
+    2. Builds executable with python build.py
+    3. Creates git commit with message "Release vX.Y.Z"
+    4. Creates git tag vX.Y.Z
+    5. Offers to push to remote
+
+Options:
+    --dry-run        Preview without making changes
+    --skip-build     Don't build executable
+    --skip-git       Don't create commits/tags
+    --help           Show detailed help
+
+For version management without release, use version_manager.py
+For complete guide, see docs/VERSION_TOOLS_GUIDE.md
 """
 
 import argparse

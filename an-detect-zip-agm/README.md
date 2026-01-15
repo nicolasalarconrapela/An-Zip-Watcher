@@ -57,10 +57,9 @@ This project uses **Semantic Versioning (SemVer)** with automated version manage
 
 **Quick Links:**
 
-- 📚 [VERSION_QUICK_START.md](VERSION_QUICK_START.md) - Quick reference for common commands
-- 📖 [VERSIONING.md](VERSIONING.md) - Complete versioning strategy and release process
+- 📚 [VERSION_TOOLS_GUIDE.md](docs/VERSION_TOOLS_GUIDE.md) - Complete guide to version scripts
+- 📖 [VERSIONING.md](docs/VERSIONING.md) - Complete versioning strategy and release process
 - 📝 [CHANGELOG.md](CHANGELOG.md) - All releases and changes history
-- 🎯 [EJEMPLOS_PRACTICOS.md](EJEMPLOS_PRACTICOS.md) - Practical usage examples
 
 ## Project Structure
 
@@ -214,9 +213,6 @@ Development Team
 
 ## Additional Resources
 
-- **Getting Started with Version Management:** [VERSION_QUICK_START.md](VERSION_QUICK_START.md)
-- **Complete Versioning Guide:** [VERSIONING.md](VERSIONING.md)
-- **Practical Examples:** [EJEMPLOS_PRACTICOS.md](EJEMPLOS_PRACTICOS.md)
+- **Complete Version Tools Guide:** [docs/VERSION_TOOLS_GUIDE.md](docs/VERSION_TOOLS_GUIDE.md)
+- **Versioning Strategy:** [docs/VERSIONING.md](docs/VERSIONING.md)
 - **Release History:** [CHANGELOG.md](CHANGELOG.md)
-
-For a complete overview of the versioning system, see [RESUMEN_VERSIONADO.md](RESUMEN_VERSIONADO.md)

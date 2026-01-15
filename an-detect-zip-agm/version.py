@@ -2,6 +2,29 @@
 Version management for AN-DETECT-ZIP-AGM
 
 This module provides version information for the application.
+
+Usage:
+    # Display version information directly
+    python version.py
+
+    # Import and use in code
+    from version import __version__, get_version_info
+    print(__version__)  # Output: 1.0.0
+    print(get_version_info())  # Output: {'title': '...', 'version': '1.0.0', ...}
+
+Semantic Versioning Format:
+    MAJOR.MINOR.PATCH+BUILD
+    
+    MAJOR: Breaking changes (e.g., 1.0.0 → 2.0.0)
+    MINOR: New features, backward compatible (e.g., 1.0.0 → 1.1.0)
+    PATCH: Bug fixes (e.g., 1.0.0 → 1.0.1)
+    BUILD: Optional build identifier (e.g., git commit)
+
+For version management:
+    - Use version_manager.py to change versions
+    - Use release.py for automated releases
+    
+See docs/VERSION_TOOLS_GUIDE.md for complete documentation.
 """
 
 __title__ = "AN-DETECT-ZIP-AGM"

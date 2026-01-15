@@ -2,7 +2,39 @@
 """
 Version management utility for AN-DETECT-ZIP-AGM
 
-This script helps manage application versions, update changelogs, and maintain version consistency.
+This script helps manage application versions following Semantic Versioning.
+
+Usage Examples:
+    # Show current version
+    python version_manager.py --show
+    
+    # Bump versions
+    python version_manager.py --patch    # 1.0.0 → 1.0.1 (bug fixes)
+    python version_manager.py --minor    # 1.0.0 → 1.1.0 (new features)
+    python version_manager.py --major    # 1.0.0 → 2.0.0 (breaking changes)
+    
+    # Change development status
+    python version_manager.py --status Production
+    python version_manager.py --status Beta
+    python version_manager.py --status Development
+    
+    # Get help
+    python version_manager.py --help
+
+Available Status Levels:
+    - Development: Active development version
+    - Alpha: Feature-complete but may have bugs
+    - Beta: Released for testing, mostly stable
+    - RC: Release Candidate
+    - Production: Stable release
+
+What It Does:
+    1. Updates version.py with new version numbers
+    2. Updates status if specified
+    3. Displays confirmation with updated version info
+
+For automated releases with git operations, see release.py
+For complete guide, see docs/VERSION_TOOLS_GUIDE.md
 """
 
 import argparse
