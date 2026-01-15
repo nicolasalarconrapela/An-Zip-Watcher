@@ -1,0 +1,34 @@
+# Changelog
+
+All notable changes to the AN-DETECT-ZIP-AGM project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - 2026-01-15
+
+### Added
+- Initial release of AN-DETECT-ZIP-AGM
+- ZIP file detection and monitoring system
+- GUI interface with tkinter
+- File repacking functionality
+- Real-time event logging
+- Settings persistence (JSON-based)
+- Build automation with PyInstaller
+- Versioning system
+
+### Features
+- Watch directories for ZIP file changes
+- Extract and process ZIP files
+- Automatic file organization (extracted, output, processed, trash)
+- Event queue-based architecture
+- Configurable polling intervals
+- Max settle time for file stability checking
+- Recent events display in UI
+- Log storage with memory limits
+
+### Technical
+- Python 3.8+
+- Watchdog library integration
+- PyInstaller support for standalone executables
+- Cross-platform support (Windows, macOS, Linux)

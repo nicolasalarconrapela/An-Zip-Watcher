@@ -10,6 +10,7 @@ import subprocess
 import platform
 import shutil
 from pathlib import Path
+from version import __version__, get_version_info
 
 
 class Colors:
@@ -179,8 +180,9 @@ def show_build_info():
 
 def main():
     """Main build process"""
-    print_header("ZipWatcher Build System")
-    print_info("Building standalone executable for your system\n")
+    version_info = get_version_info()
+    print_header(f"{version_info['title']} Build System v{version_info['version']}")
+    print_info(f"Building {version_info['status'].lower()} version: {version_info['version']}\n")
     
     # Step 1: Check dependencies
     if not check_dependencies():
