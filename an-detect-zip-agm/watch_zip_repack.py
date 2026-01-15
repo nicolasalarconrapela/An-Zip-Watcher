@@ -11,11 +11,6 @@ from watchdog.events import FileSystemEventHandler
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("settings.json")
 
-
-def default_downloads_dir() -> Path:
-    return Path.home() / "Downloads"
-
-
 def load_settings(config_path: Path) -> dict:
     if config_path.exists():
         try:
@@ -28,15 +23,15 @@ def load_settings(config_path: Path) -> dict:
 
 
 def resolve_watch_dir(cli_watch_dir: str | None, settings: dict) -> Path:
-    if cli_watch_dir:
-        return Path(cli_watch_dir).expanduser().resolve()
+    watch_dir = cli_watch_dir or settings.get("watch_dir")
 
-    watch_dir = (settings.get("watch_dir") or "").strip()
-    if watch_dir:
-        return Path(watch_dir).expanduser().resolve()
+    if not watch_dir:
+        raise RuntimeError(
+            "No se ha definido watch_dir. "
+            "Es obligatorio especificar --watch-dir o settings.json"
+        )
 
-    return default_downloads_dir().expanduser().resolve()
-
+    return Path(watch_dir).expanduser().resolve()
 
 def wait_until_file_stable(file_path: Path, poll_seconds: float, max_tries: int) -> None:
     last_size = -1
@@ -180,7 +175,11 @@ def main():
     args = parser.parse_args()
 
     settings = load_settings(Path(args.config))
-    watch_dir = resolve_watch_dir(args.watch_dir, settings)
+    try:
+        watch_dir = resolve_watch_dir(args.watch_dir, settings)
+    except RuntimeError as e:
+        print(f"[FATAL] {e}")
+        return
 
     extract_root = watch_dir / (settings.get("extract_subdir") or "extracted")
     output_dir = watch_dir / (settings.get("output_subdir") or "output")
