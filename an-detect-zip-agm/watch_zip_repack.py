@@ -29,6 +29,7 @@ DEFAULT_SETTINGS = {
     "poll_settle_seconds": 1.0,
     "max_settle_tries": 30,
     "scan_interval_seconds": 0.5,
+    "max_recent_events": 50,
 }
 
 
@@ -58,8 +59,9 @@ def save_settings(settings: dict) -> None:
 
 @dataclass(frozen=True)
 class LogEvent:
-    level: str  # "INFO" | "WARN" | "ERROR" | "OK"
+    level: str
     msg: str
+    ts: float
 
 
 LEVEL_EMOJI = {
@@ -72,6 +74,22 @@ LEVEL_EMOJI = {
     "ZIP": "📦",
     "FOLDER": "📁",
     "CLEAN": "🧹",
+    "TRASH": "🗑️",
+    "SEARCH": "🔎",
+}
+
+COUNT_BUCKET = {
+    "INFO": "INFO",
+    "OK": "OK",
+    "WARN": "WARN",
+    "ERROR": "ERROR",
+    "START": "INFO",
+    "STOP": "INFO",
+    "ZIP": "INFO",
+    "FOLDER": "INFO",
+    "CLEAN": "INFO",
+    "TRASH": "INFO",
+    "SEARCH": "INFO",
 }
 
 
@@ -232,13 +250,25 @@ class ZipWatcherApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("ZIP Watcher")
-        self.minsize(980, 640)
+        self.minsize(1120, 720)
 
         self.settings = load_settings()
 
         self._log_queue: "queue.Queue[LogEvent]" = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: WatcherThread | None = None
+
+        # store para filtros/busqueda/export
+        self._log_store: list[LogEvent] = []
+
+        # counters
+        self._count_info = 0
+        self._count_ok = 0
+        self._count_warn = 0
+        self._count_error = 0
+
+        # recent events (tabla)
+        self._max_recent = int(self.settings.get("max_recent_events", 50))
 
         self._build_style()
         self._build_layout()
@@ -249,7 +279,7 @@ class ZipWatcherApp(tk.Tk):
 
         self._set_status("Listo", "idle")
 
-    # ---------- Styling
+    # ---------- Style
     def _build_style(self):
         style = ttk.Style(self)
         try:
@@ -280,7 +310,7 @@ class ZipWatcherApp(tk.Tk):
         root.pack(fill="both", expand=True)
 
         # Sidebar
-        self.sidebar = ttk.Frame(root, style="Sidebar.TFrame", width=220)
+        self.sidebar = ttk.Frame(root, style="Sidebar.TFrame", width=240)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
@@ -304,7 +334,7 @@ class ZipWatcherApp(tk.Tk):
         self.btn_open = ttk.Button(toolbar, text="Abrir carpeta", style="Ghost.TButton", command=self.open_watch_folder)
         self.btn_open.pack(side="left", padx=8, pady=10)
 
-        # Status
+        # Status (right)
         self.status_text = tk.StringVar(value="Listo")
         self.status_pill = tk.StringVar(value="IDLE")
         status_frame = ttk.Frame(toolbar, style="Toolbar.TFrame")
@@ -321,12 +351,13 @@ class ZipWatcherApp(tk.Tk):
         tk.Label(header, text="ZIP Watcher", font=("Segoe UI", 18, "bold"), bg="#f6f7fb").pack(side="left")
         tk.Label(
             header,
-            text="Monitoriza ZIPs, descomprime y genera un ZIP a partir de la primera carpeta.",
+            text="Monitoriza ZIPs → descomprime → comprime la primera carpeta.",
             font=("Segoe UI", 10),
             bg="#f6f7fb",
             fg="#6b7280",
         ).pack(side="left", padx=(12, 0))
 
+        # Two columns
         body = ttk.Frame(content, style="App.TFrame")
         body.pack(fill="both", expand=True)
 
@@ -336,77 +367,141 @@ class ZipWatcherApp(tk.Tk):
         right_col = ttk.Frame(body, style="App.TFrame")
         right_col.pack(side="left", fill="both", expand=True, padx=(14, 0))
 
-        # Config card
+        # -------- Dashboard card (left top)
+        self.card_dash = ttk.Frame(left_col, style="Card.TFrame")
+        self.card_dash.pack(fill="x")
+
+        dash = ttk.Frame(self.card_dash, style="Card.TFrame")
+        dash.pack(fill="x", padx=14, pady=14)
+
+        ttk.Label(dash, text="Dashboard", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(dash, text="Estado, contadores y rutas principales.", style="Muted.TLabel").pack(anchor="w", pady=(4, 12))
+
+        self.dash_state = tk.StringVar(value="Parado")
+        self.dash_watch = tk.StringVar(value="(sin configurar)")
+        self.dash_subs = tk.StringVar(value="")
+
+        ttk.Label(dash, textvariable=self.dash_state, background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(dash, textvariable=self.dash_watch, background="#ffffff", foreground="#374151").pack(anchor="w", pady=(6, 0))
+        ttk.Label(dash, textvariable=self.dash_subs, background="#ffffff", foreground="#6b7280", wraplength=520, justify="left").pack(anchor="w", pady=(6, 0))
+
+        self.counts_var = tk.StringVar(value="INFO: 0   OK: 0   WARN: 0   ERROR: 0")
+        ttk.Label(dash, textvariable=self.counts_var, background="#ffffff", foreground="#111827", font=("Segoe UI", 11)).pack(anchor="w", pady=(10, 0))
+
+        # -------- Config card (left bottom)
         self.card_config = ttk.Frame(left_col, style="Card.TFrame")
-        self.card_config.pack(fill="both", expand=True)
+        self.card_config.pack(fill="both", expand=True, pady=(14, 0))
 
-        cfg_inner = ttk.Frame(self.card_config, style="Card.TFrame")
-        cfg_inner.pack(fill="both", expand=True, padx=14, pady=14)
+        cfg = ttk.Frame(self.card_config, style="Card.TFrame")
+        cfg.pack(fill="both", expand=True, padx=14, pady=14)
 
-        ttk.Label(cfg_inner, text="Configuración", style="H1.TLabel").pack(anchor="w")
-        ttk.Label(cfg_inner, text="Define la carpeta de escucha y parámetros de estabilidad.", style="Muted.TLabel").pack(anchor="w", pady=(4, 12))
+        ttk.Label(cfg, text="Configuración", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(cfg, text="Ruta de escucha y parámetros.", style="Muted.TLabel").pack(anchor="w", pady=(4, 12))
 
         self.var_watch_dir = tk.StringVar()
         self.var_poll = tk.StringVar()
         self.var_tries = tk.StringVar()
         self.var_scan = tk.StringVar()
 
-        row = ttk.Frame(cfg_inner, style="Card.TFrame")
-        row.pack(fill="x", pady=6)
-        ttk.Label(row, text="Carpeta de escucha", background="#ffffff").pack(anchor="w")
-        r2 = ttk.Frame(row, style="Card.TFrame")
-        r2.pack(fill="x", pady=(4, 0))
-        ttk.Entry(r2, textvariable=self.var_watch_dir).pack(side="left", fill="x", expand=True)
-        ttk.Button(r2, text="Explorar...", command=self.browse_folder).pack(side="left", padx=(8, 0))
+        ttk.Label(cfg, text="Carpeta de escucha", background="#ffffff").pack(anchor="w")
+        row = ttk.Frame(cfg, style="Card.TFrame")
+        row.pack(fill="x", pady=(4, 10))
+        ttk.Entry(row, textvariable=self.var_watch_dir).pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Explorar...", command=self.browse_folder).pack(side="left", padx=(8, 0))
 
-        grid = ttk.Frame(cfg_inner, style="Card.TFrame")
-        grid.pack(fill="x", pady=(14, 6))
+        grid = ttk.Frame(cfg, style="Card.TFrame")
+        grid.pack(fill="x", pady=(6, 12))
 
-        def field(parent, label, var, width=14):
+        def field(parent, label, var):
             f = ttk.Frame(parent, style="Card.TFrame")
             ttk.Label(f, text=label, background="#ffffff").pack(anchor="w")
-            ttk.Entry(f, textvariable=var, width=width).pack(anchor="w", pady=(4, 0))
+            ttk.Entry(f, textvariable=var, width=16).pack(anchor="w", pady=(4, 0))
             return f
 
         field(grid, "poll_settle_seconds", self.var_poll).grid(row=0, column=0, sticky="w", padx=(0, 18))
         field(grid, "max_settle_tries", self.var_tries).grid(row=0, column=1, sticky="w", padx=(0, 18))
         field(grid, "scan_interval_seconds", self.var_scan).grid(row=0, column=2, sticky="w")
 
-        ttk.Label(
-            cfg_inner,
-            text="Nota: por seguridad, no existe carpeta por defecto. Debe configurarse explícitamente.",
-            background="#ffffff",
-            foreground="#6b7280"
-        ).pack(anchor="w", pady=(14, 0))
+        ttk.Label(cfg, text="Seguridad: no existe carpeta por defecto. Debe definirse explícitamente.",
+                  background="#ffffff", foreground="#6b7280").pack(anchor="w")
 
-        # Activity card
+        # -------- Activity / Maintenance card (right)
         self.card_activity = ttk.Frame(right_col, style="Card.TFrame")
         self.card_activity.pack(fill="both", expand=True)
 
-        act_inner = ttk.Frame(self.card_activity, style="Card.TFrame")
-        act_inner.pack(fill="both", expand=True, padx=14, pady=14)
+        act = ttk.Frame(self.card_activity, style="Card.TFrame")
+        act.pack(fill="both", expand=True, padx=14, pady=14)
 
-        top_act = ttk.Frame(act_inner, style="Card.TFrame")
-        top_act.pack(fill="x")
-        ttk.Label(top_act, text="Actividad", style="H1.TLabel").pack(side="left")
+        top = ttk.Frame(act, style="Card.TFrame")
+        top.pack(fill="x")
+        ttk.Label(top, text="Actividad y mantenimiento", style="H1.TLabel").pack(side="left")
 
-        self.btn_clean_output = ttk.Button(top_act, text="🧹 Limpiar output → Trash", command=self.clean_output_to_trash)
-        self.btn_clean_output.pack(side="right")
+        # Maintenance buttons (filesystem) — separados, explícitos
+        self.btn_clean_all = ttk.Button(top, text="🧹 Limpiar TODO → Trash", command=self.clean_all_to_trash)
+        self.btn_clean_all.pack(side="right")
 
-        self.btn_clear_logs = ttk.Button(top_act, text="🧽 Limpiar logs", command=self.clear_logs)
-        self.btn_clear_logs.pack(side="right", padx=(0, 8))
+        self.btn_clean_output = ttk.Button(top, text="🧹 Output", command=lambda: self.clean_dir_to_trash("output"))
+        self.btn_clean_output.pack(side="right", padx=(0, 8))
 
-        self.btn_export_logs = ttk.Button(top_act, text="💾 Exportar…", command=self.export_logs)
-        self.btn_export_logs.pack(side="right", padx=(0, 8))
+        self.btn_clean_extracted = ttk.Button(top, text="🧹 Extracted", command=lambda: self.clean_dir_to_trash("extracted"))
+        self.btn_clean_extracted.pack(side="right", padx=(0, 8))
 
-        self.btn_copy_logs = ttk.Button(top_act, text="📋 Copiar", command=self.copy_logs)
-        self.btn_copy_logs.pack(side="right", padx=(0, 8))
+        self.btn_clean_processed = ttk.Button(top, text="🧹 Processed", command=lambda: self.clean_dir_to_trash("processed"))
+        self.btn_clean_processed.pack(side="right", padx=(0, 8))
 
-        ttk.Label(act_inner, text="Registro en tiempo real (con emojis).", style="Muted.TLabel").pack(anchor="w", pady=(4, 10))
+        self.btn_empty_trash = ttk.Button(top, text="🗑️ Vaciar Trash", command=self.empty_trash)
+        self.btn_empty_trash.pack(side="right", padx=(0, 8))
 
+        # Logs controls
+        controls = ttk.Frame(act, style="Card.TFrame")
+        controls.pack(fill="x", pady=(12, 8))
+
+        self.btn_clear_logs = ttk.Button(controls, text="🧽 Limpiar logs (UI)", command=self.clear_logs_only)
+        self.btn_clear_logs.pack(side="left")
+
+        self.btn_copy_logs = ttk.Button(controls, text="📋 Copiar", command=self.copy_logs)
+        self.btn_copy_logs.pack(side="left", padx=(8, 0))
+
+        self.btn_export_logs = ttk.Button(controls, text="💾 Exportar…", command=self.export_logs)
+        self.btn_export_logs.pack(side="left", padx=(8, 0))
+
+        ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=12)
+
+        # Filters
+        self.filter_info = tk.BooleanVar(value=True)
+        self.filter_ok = tk.BooleanVar(value=True)
+        self.filter_warn = tk.BooleanVar(value=True)
+        self.filter_error = tk.BooleanVar(value=True)
+
+        ttk.Checkbutton(controls, text="ℹ️ INFO", variable=self.filter_info, command=self.refresh_logs_view).pack(side="left")
+        ttk.Checkbutton(controls, text="✅ OK", variable=self.filter_ok, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(controls, text="⚠️ WARN", variable=self.filter_warn, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(controls, text="❌ ERROR", variable=self.filter_error, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+
+        self.btn_only_issues = ttk.Button(controls, text="Solo WARN+ERROR", command=self.only_warn_error)
+        self.btn_only_issues.pack(side="left", padx=(12, 0))
+
+        self.btn_show_all = ttk.Button(controls, text="Mostrar todo", command=self.show_all_levels)
+        self.btn_show_all.pack(side="left", padx=(8, 0))
+
+        # Search
+        search = ttk.Frame(act, style="Card.TFrame")
+        search.pack(fill="x", pady=(0, 10))
+        ttk.Label(search, text="Buscar en logs:", background="#ffffff").pack(side="left")
+        self.search_var = tk.StringVar(value="")
+        ttk.Entry(search, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(8, 8))
+        ttk.Button(search, text="🔎 Buscar", command=self.search_logs).pack(side="left")
+        ttk.Button(search, text="Reset", command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+
+        # Split: logs + recent events
+        split = ttk.PanedWindow(act, orient="vertical")
+        split.pack(fill="both", expand=True)
+
+        # Logs text
+        logs_frame = ttk.Frame(split, style="Card.TFrame")
         self.txt_logs = tk.Text(
-            act_inner,
-            height=18,
+            logs_frame,
+            height=16,
             wrap="word",
             bg="#0b1220",
             fg="#e5e7eb",
@@ -418,34 +513,50 @@ class ZipWatcherApp(tk.Tk):
         self.txt_logs.pack(fill="both", expand=True)
         self.txt_logs.configure(state="disabled")
 
-        # Sidebar
-        self._build_sidebar()
-
-        # Bottom status bar
-        self.statusbar = ttk.Frame(main, style="Toolbar.TFrame")
-        self.statusbar.pack(side="bottom", fill="x")
-        self.sb_left = tk.StringVar(value="Config: " + str(SETTINGS_PATH))
-        ttk.Label(self.statusbar, textvariable=self.sb_left, style="Status.TLabel").pack(side="left", padx=14, pady=6)
-
-        self.sb_right = tk.StringVar(value="")
-        ttk.Label(self.statusbar, textvariable=self.sb_right, style="Status.TLabel").pack(side="right", padx=14, pady=6)
-
-        # Tag styles (once)
+        # Tags
         self.txt_logs.tag_config("INFO", foreground="#93c5fd")
         self.txt_logs.tag_config("OK", foreground="#86efac")
         self.txt_logs.tag_config("WARN", foreground="#fde68a")
         self.txt_logs.tag_config("ERROR", foreground="#fca5a5")
-        # “special” levels map to INFO unless specified
         self.txt_logs.tag_config("START", foreground="#86efac")
         self.txt_logs.tag_config("STOP", foreground="#fca5a5")
         self.txt_logs.tag_config("ZIP", foreground="#c4b5fd")
         self.txt_logs.tag_config("FOLDER", foreground="#67e8f9")
         self.txt_logs.tag_config("CLEAN", foreground="#a7f3d0")
+        self.txt_logs.tag_config("TRASH", foreground="#a7f3d0")
+        self.txt_logs.tag_config("SEARCH", foreground="#fcd34d")
+
+        # Recent events table
+        table_frame = ttk.Frame(split, style="Card.TFrame")
+        ttk.Label(table_frame, text="Últimos eventos", background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=8, pady=(8, 0))
+
+        cols = ("time", "level", "msg")
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=7)
+        self.tree.heading("time", text="Hora")
+        self.tree.heading("level", text="Nivel")
+        self.tree.heading("msg", text="Mensaje")
+        self.tree.column("time", width=90, anchor="w")
+        self.tree.column("level", width=80, anchor="w")
+        self.tree.column("msg", width=700, anchor="w")
+        self.tree.pack(fill="both", expand=True, padx=8, pady=8)
+
+        split.add(logs_frame, weight=3)
+        split.add(table_frame, weight=1)
+
+        # Sidebar
+        self._build_sidebar()
+
+        # Statusbar
+        self.statusbar = ttk.Frame(main, style="Toolbar.TFrame")
+        self.statusbar.pack(side="bottom", fill="x")
+        self.sb_left = tk.StringVar(value="Config: " + str(SETTINGS_PATH))
+        ttk.Label(self.statusbar, textvariable=self.sb_left, style="Status.TLabel").pack(side="left", padx=14, pady=6)
+        self.sb_right = tk.StringVar(value="")
+        ttk.Label(self.statusbar, textvariable=self.sb_right, style="Status.TLabel").pack(side="right", padx=14, pady=6)
 
     def _build_sidebar(self):
         pad = {"padx": 14, "pady": 10}
         ttk.Label(self.sidebar, text="ZIP Watcher", style="SidebarTitle.TLabel").pack(anchor="w", **pad)
-
         ttk.Separator(self.sidebar).pack(fill="x", padx=14, pady=(0, 10))
 
         self.side_info = tk.StringVar(value="Estado: Parado")
@@ -454,18 +565,18 @@ class ZipWatcherApp(tk.Tk):
         ttk.Button(self.sidebar, text="Iniciar", command=self.start_watcher).pack(fill="x", padx=14, pady=6)
         ttk.Button(self.sidebar, text="Parar", command=self.stop_watcher).pack(fill="x", padx=14, pady=6)
         ttk.Button(self.sidebar, text="Guardar configuración", command=self.save_from_form).pack(fill="x", padx=14, pady=6)
-        ttk.Button(self.sidebar, text="Abrir carpeta de escucha", command=self.open_watch_folder).pack(fill="x", padx=14, pady=6)
+        ttk.Button(self.sidebar, text="Abrir carpeta", command=self.open_watch_folder).pack(fill="x", padx=14, pady=6)
 
         ttk.Separator(self.sidebar).pack(fill="x", padx=14, pady=(12, 10))
 
         self.side_paths = tk.StringVar(value="(sin carpeta configurada)")
         ttk.Label(self.sidebar, text="Rutas:", background="#111827", foreground="#9ca3af").pack(anchor="w", padx=14)
         ttk.Label(self.sidebar, textvariable=self.side_paths, background="#111827", foreground="#d1d5db",
-                  wraplength=190, justify="left").pack(anchor="w", padx=14, pady=(4, 0))
+                  wraplength=210, justify="left").pack(anchor="w", padx=14, pady=(4, 0))
 
     # ---------- Helpers
     def emit(self, level: str, msg: str):
-        self._log_queue.put(LogEvent(level=level, msg=msg))
+        self._log_queue.put(LogEvent(level=level.upper(), msg=msg, ts=time.time()))
 
     def _set_status(self, text: str, pill: str):
         self.status_text.set(text)
@@ -474,54 +585,84 @@ class ZipWatcherApp(tk.Tk):
 
         if pill.lower() == "running":
             self.side_info.set("Estado: En ejecución")
+            self.dash_state.set("Estado: En ejecución")
         elif pill.lower() == "stopping":
             self.side_info.set("Estado: Deteniendo…")
+            self.dash_state.set("Estado: Deteniendo…")
         else:
-            self.side_info.set("Estado: Parado" if pill.lower() == "idle" else f"Estado: {pill}")
+            self.side_info.set("Estado: Parado")
+            self.dash_state.set("Estado: Parado")
 
     def _is_running(self) -> bool:
         return bool(self._worker and self._worker.is_alive())
 
+    def settings_getter(self):
+        return dict(self.settings)
+
+    # ---------- Paths
     def _watch_dir(self) -> Path | None:
         wd = (self.settings.get("watch_dir") or "").strip()
         if not wd:
             return None
         return Path(wd).expanduser().resolve()
 
-    def _output_dir(self) -> Path | None:
+    def _dir(self, key: str) -> Path | None:
         wd = self._watch_dir()
         if wd is None:
             return None
-        return wd / (self.settings.get("output_subdir") or "output")
+        if key == "output":
+            return wd / (self.settings.get("output_subdir") or "output")
+        if key == "extracted":
+            return wd / (self.settings.get("extract_subdir") or "extracted")
+        if key == "processed":
+            return wd / (self.settings.get("processed_subdir") or "processed")
+        if key == "trash":
+            return wd / "Trash"
+        return None
 
-    def _trash_dir(self) -> Path | None:
-        wd = self._watch_dir()
-        if wd is None:
-            return None
-        return wd / "Trash"
-
-    def settings_getter(self):
-        return dict(self.settings)
-
-    # ---------- Form load/save
+    # ---------- Config load/save
     def _load_to_form(self):
         self.var_watch_dir.set(self.settings.get("watch_dir", ""))
         self.var_poll.set(str(self.settings.get("poll_settle_seconds", 1.0)))
         self.var_tries.set(str(self.settings.get("max_settle_tries", 30)))
         self.var_scan.set(str(self.settings.get("scan_interval_seconds", 0.5)))
         self._refresh_sidebar_paths()
+        self._refresh_dashboard_paths()
 
     def _refresh_sidebar_paths(self):
         wd = self._watch_dir()
         if wd is None:
             self.side_paths.set("(sin carpeta configurada)")
+            self.dash_watch.set("(sin configurar)")
+            self.dash_subs.set("")
             return
-        extracted = wd / (self.settings.get("extract_subdir") or "extracted")
-        output = wd / (self.settings.get("output_subdir") or "output")
-        processed = wd / (self.settings.get("processed_subdir") or "processed")
-        trash = wd / "Trash"
+
+        extracted = self._dir("extracted")
+        output = self._dir("output")
+        processed = self._dir("processed")
+        trash = self._dir("trash")
         self.side_paths.set(
             f"{wd}\n\nextracted:\n{extracted}\n\noutput:\n{output}\n\nprocessed:\n{processed}\n\nTrash:\n{trash}"
+        )
+
+    def _refresh_dashboard_paths(self):
+        wd = self._watch_dir()
+        if wd is None:
+            self.dash_watch.set("(sin configurar)")
+            self.dash_subs.set("")
+            return
+
+        extracted = self._dir("extracted")
+        output = self._dir("output")
+        processed = self._dir("processed")
+        trash = self._dir("trash")
+        self.dash_watch.set(f"Carpeta de escucha: {wd}")
+        self.dash_subs.set(
+            f"Subcarpetas: extracted / output / processed / Trash\n"
+            f"extracted: {extracted}\n"
+            f"output: {output}\n"
+            f"processed: {processed}\n"
+            f"Trash: {trash}"
         )
 
     def browse_folder(self):
@@ -562,10 +703,11 @@ class ZipWatcherApp(tk.Tk):
 
         save_settings(self.settings)
         self._refresh_sidebar_paths()
+        self._refresh_dashboard_paths()
         self.emit("OK", f"Configuración guardada en {SETTINGS_PATH}")
         self._set_status("Configuración guardada", "running" if self._is_running() else "idle")
 
-    # ---------- Watcher controls
+    # ---------- Start/Stop
     def start_watcher(self):
         if self._is_running():
             return
@@ -575,7 +717,6 @@ class ZipWatcherApp(tk.Tk):
             messagebox.showerror("Validación", msg)
             return
 
-        # Persist and use latest values
         self.save_from_form()
 
         self._stop_event.clear()
@@ -584,7 +725,10 @@ class ZipWatcherApp(tk.Tk):
 
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
-        self.btn_clean_output.configure(state="disabled")  # evita limpiar mientras corre
+
+        # Bloquea mantenimiento mientras corre (evita carreras)
+        self._set_maintenance_enabled(False)
+
         self._set_status("En ejecución", "running")
         self.emit("START", "Monitorización activa.")
 
@@ -595,7 +739,7 @@ class ZipWatcherApp(tk.Tk):
         self._set_status("Deteniendo…", "stopping")
         self.btn_stop.configure(state="disabled")
         self.btn_start.configure(state="disabled")
-        self.btn_clean_output.configure(state="disabled")
+        self._set_maintenance_enabled(False)
         self.after(150, self._join_worker)
 
     def _join_worker(self):
@@ -605,9 +749,47 @@ class ZipWatcherApp(tk.Tk):
 
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
-        self.btn_clean_output.configure(state="normal")
+        self._set_maintenance_enabled(True)
         self._set_status("Parado", "idle")
         self.emit("STOP", "Watcher parado.")
+
+    def _set_maintenance_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        for btn in (
+            self.btn_clean_all,
+            self.btn_clean_output,
+            self.btn_clean_extracted,
+            self.btn_clean_processed,
+            self.btn_empty_trash,
+        ):
+            btn.configure(state=state)
+
+    # ---------- Filters
+    def _level_visible(self, level: str) -> bool:
+        bucket = COUNT_BUCKET.get(level.upper(), "INFO")
+        if bucket == "INFO":
+            return self.filter_info.get()
+        if bucket == "OK":
+            return self.filter_ok.get()
+        if bucket == "WARN":
+            return self.filter_warn.get()
+        if bucket == "ERROR":
+            return self.filter_error.get()
+        return True
+
+    def only_warn_error(self):
+        self.filter_info.set(False)
+        self.filter_ok.set(False)
+        self.filter_warn.set(True)
+        self.filter_error.set(True)
+        self.refresh_logs_view()
+
+    def show_all_levels(self):
+        self.filter_info.set(True)
+        self.filter_ok.set(True)
+        self.filter_warn.set(True)
+        self.filter_error.set(True)
+        self.refresh_logs_view()
 
     # ---------- Actions
     def open_watch_folder(self):
@@ -621,9 +803,46 @@ class ZipWatcherApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo abrir la carpeta: {e}")
 
-    def clean_output_to_trash(self):
+    # ========= Maintenance (filesystem) =========
+
+    def _move_dir_contents_to_trash(self, src_dir: Path, trash_base: Path, tag: str) -> tuple[int, int, Path]:
+        """
+        Mueve contenido de src_dir a Trash/<tag>_<timestamp>/...
+        Devuelve (moved, total, dest_batch_dir)
+        """
+        total = 0
+        moved = 0
+
+        if not src_dir.exists():
+            return moved, total, trash_base
+
+        items = [p for p in src_dir.iterdir()]
+        total = len(items)
+        if total == 0:
+            return moved, total, trash_base
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        batch_dir = trash_base / f"{tag}_{stamp}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+
+        for p in items:
+            try:
+                dest = batch_dir / p.name
+                if dest.exists():
+                    # colisión
+                    suffix = p.suffix if p.is_file() else ""
+                    stem = p.stem if p.is_file() else p.name
+                    dest = batch_dir / f"{stem}__{int(time.time())}{suffix}"
+                shutil.move(str(p), str(dest))
+                moved += 1
+            except Exception as e:
+                self.emit("WARN", f"No se pudo mover {p.name}: {e}")
+
+        return moved, total, batch_dir
+
+    def clean_dir_to_trash(self, which: str):
         if self._is_running():
-            messagebox.showwarning("En ejecución", "Por seguridad, detén el watcher antes de limpiar.")
+            messagebox.showwarning("En ejecución", "Detén el watcher antes de limpiar directorios.")
             return
 
         wd = self._watch_dir()
@@ -631,49 +850,145 @@ class ZipWatcherApp(tk.Tk):
             messagebox.showerror("Error", "Define y guarda una carpeta de escucha antes de limpiar.")
             return
 
-        output_dir = self._output_dir()
-        trash_dir = self._trash_dir()
-        assert output_dir is not None and trash_dir is not None
+        src = self._dir(which)
+        trash = self._dir("trash")
+        assert src is not None and trash is not None
 
-        if not output_dir.exists():
-            messagebox.showinfo("Output", f"No existe la carpeta output:\n{output_dir}")
+        if not src.exists():
+            messagebox.showinfo("No existe", f"No existe el directorio:\n{src}")
             return
 
-        items = [p for p in output_dir.iterdir()]
+        items = [p for p in src.iterdir()]
         if not items:
-            messagebox.showinfo("Output", "No hay elementos en output para mover.")
+            messagebox.showinfo("Vacío", f"No hay elementos en:\n{src}")
             return
 
         if not messagebox.askyesno(
             "Confirmar",
-            f"Se moverán {len(items)} elementos de:\n{output_dir}\n\nhacia:\n{trash_dir}\n\n¿Continuar?"
+            f"Se moverán {len(items)} elementos de:\n{src}\n\nhacia:\n{trash}\n\n¿Continuar?"
         ):
             return
 
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        batch_dir = trash_dir / f"output_{stamp}"
-        batch_dir.mkdir(parents=True, exist_ok=True)
+        moved, total, batch_dir = self._move_dir_contents_to_trash(src, trash, which)
+        self.emit("CLEAN", f"{which.upper()} limpiado: {moved}/{total} movidos a {batch_dir}")
+        messagebox.showinfo("Completado", f"{which.upper()} → Trash\nMovidos {moved}/{total} a:\n{batch_dir}")
 
-        moved = 0
+    def clean_all_to_trash(self):
+        if self._is_running():
+            messagebox.showwarning("En ejecución", "Detén el watcher antes de limpiar TODO.")
+            return
+
+        wd = self._watch_dir()
+        if wd is None:
+            messagebox.showerror("Error", "Define y guarda una carpeta de escucha antes de limpiar.")
+            return
+
+        trash = self._dir("trash")
+        outd = self._dir("output")
+        exd = self._dir("extracted")
+        prd = self._dir("processed")
+        assert trash is not None and outd is not None and exd is not None and prd is not None
+
+        # Conteo previo
+        counts = []
+        for name, d in (("output", outd), ("extracted", exd), ("processed", prd)):
+            n = len(list(d.iterdir())) if d.exists() else 0
+            counts.append((name, n))
+
+        if all(n == 0 for _, n in counts):
+            messagebox.showinfo("Nada que limpiar", "No hay elementos en output/extracted/processed.")
+            return
+
+        summary = "\n".join([f"- {name}: {n}" for name, n in counts])
+        if not messagebox.askyesno(
+            "Confirmar LIMPIEZA TOTAL",
+            f"Se moverá el contenido de:\n{summary}\n\nhacia:\n{trash}\n\n¿Continuar?"
+        ):
+            return
+
+        total_moved = 0
+        total_items = 0
+        batches = []
+
+        for name, d in (("output", outd), ("extracted", exd), ("processed", prd)):
+            moved, total, batch_dir = self._move_dir_contents_to_trash(d, trash, name)
+            total_moved += moved
+            total_items += total
+            if total > 0:
+                batches.append(str(batch_dir))
+
+        self.emit("CLEAN", f"Limpieza TOTAL: {total_moved}/{total_items} movidos a Trash")
+        messagebox.showinfo(
+            "Limpieza total completada",
+            f"Movidos {total_moved}/{total_items} elementos.\n\nDestinos:\n" + "\n".join(batches[:10]) + ("\n..." if len(batches) > 10 else "")
+        )
+
+    def empty_trash(self):
+        if self._is_running():
+            messagebox.showwarning("En ejecución", "Detén el watcher antes de vaciar Trash.")
+            return
+
+        wd = self._watch_dir()
+        if wd is None:
+            messagebox.showerror("Error", "Define y guarda una carpeta de escucha antes de vaciar Trash.")
+            return
+
+        trash = self._dir("trash")
+        assert trash is not None
+
+        if not trash.exists():
+            messagebox.showinfo("Trash", f"No existe Trash:\n{trash}")
+            return
+
+        items = [p for p in trash.iterdir()]
+        if not items:
+            messagebox.showinfo("Trash", "Trash está vacío.")
+            return
+
+        # Doble confirmación: esto sí elimina definitivamente
+        if not messagebox.askyesno(
+            "Confirmar",
+            f"Esto eliminará DEFINITIVAMENTE {len(items)} elementos dentro de:\n{trash}\n\n¿Continuar?"
+        ):
+            return
+        if not messagebox.askyesno(
+            "Confirmación final",
+            "Último aviso: esta acción no se puede deshacer.\n\n¿Eliminar definitivamente?"
+        ):
+            return
+
+        deleted = 0
         for p in items:
             try:
-                dest = batch_dir / p.name
-                if dest.exists():
-                    dest = batch_dir / f"{p.stem}__{int(time.time())}{p.suffix}"
-                shutil.move(str(p), str(dest))
-                moved += 1
+                if p.is_dir():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
+                deleted += 1
             except Exception as e:
-                self.emit("WARN", f"No se pudo mover {p.name}: {e}")
+                self.emit("WARN", f"No se pudo eliminar {p.name}: {e}")
 
-        self.emit("CLEAN", f"Limpieza completada: {moved}/{len(items)} movidos a {batch_dir}")
-        messagebox.showinfo("Limpieza", f"Movidos {moved}/{len(items)} elementos a:\n{batch_dir}")
+        self.emit("TRASH", f"Trash vaciado: {deleted}/{len(items)} eliminados definitivamente")
+        messagebox.showinfo("Trash", f"Eliminados {deleted}/{len(items)} elementos de Trash.")
 
-    def clear_logs(self):
-        # Limpieza de logs (UI)
+    # ========= Logs UI =========
+
+    def clear_logs_only(self):
+        # Limpia UI + store + counters (NO toca filesystem)
+        self._log_store.clear()
+        self._count_info = self._count_ok = self._count_warn = self._count_error = 0
+        self._update_counts_label()
+
         self.txt_logs.configure(state="normal")
         self.txt_logs.delete("1.0", "end")
         self.txt_logs.configure(state="disabled")
-        self.emit("CLEAN", "Logs limpiados.")
+
+        # mensaje informativo directo (sin store)
+        self._append_log_direct("SEARCH", "Logs limpiados (solo UI).")
+
+        # limpiar tabla recent
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
 
     def copy_logs(self):
         self.txt_logs.configure(state="normal")
@@ -702,37 +1017,119 @@ class ZipWatcherApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo exportar: {e}")
 
-    # ---------- Log pump
+    def search_logs(self):
+        q = (self.search_var.get() or "").strip().lower()
+        if not q:
+            self.refresh_logs_view()
+            return
+
+        # Re-render con filtro adicional (texto)
+        self.txt_logs.configure(state="normal")
+        self.txt_logs.delete("1.0", "end")
+        self.txt_logs.configure(state="disabled")
+
+        hits = 0
+        for ev in self._log_store:
+            if not self._level_visible(ev.level):
+                continue
+            if q in ev.msg.lower() or q in ev.level.lower():
+                self._append_log_to_text(ev)
+                hits += 1
+
+        self.emit("SEARCH", f"Búsqueda '{q}': {hits} coincidencias (sobre vista filtrada).")
+
+    # ---------- Log pump + rendering
     def _tick_logs(self):
         try:
             while True:
                 ev = self._log_queue.get_nowait()
-                self._append_log(ev)
+                self._handle_log_event(ev)
         except queue.Empty:
             pass
         self.after(120, self._tick_logs)
 
-    def _append_log(self, ev: LogEvent):
-        ts = time.strftime("%H:%M:%S")
-        lvl = ev.level.upper()
+    def _handle_log_event(self, ev: LogEvent):
+        # store + counters
+        self._log_store.append(ev)
+        bucket = COUNT_BUCKET.get(ev.level, "INFO")
+        if bucket == "INFO":
+            self._count_info += 1
+        elif bucket == "OK":
+            self._count_ok += 1
+        elif bucket == "WARN":
+            self._count_warn += 1
+        elif bucket == "ERROR":
+            self._count_error += 1
+        self._update_counts_label()
 
-        # Emoji + label
-        prefix = f"{emoji(lvl)}"
-        line = f"{ts} {prefix} [{lvl}] {ev.msg}\n"
+        # render to text if visible
+        if self._level_visible(ev.level):
+            self._append_log_to_text(ev)
+
+        # recent events table
+        self._push_recent_event(ev)
+
+        # dashboard refresh (ruta + subcarpetas)
+        self._refresh_dashboard_paths()
+
+        self.sb_right.set(time.strftime("%Y-%m-%d %H:%M:%S"))
+
+    def _update_counts_label(self):
+        self.counts_var.set(
+            f"INFO: {self._count_info}   OK: {self._count_ok}   WARN: {self._count_warn}   ERROR: {self._count_error}"
+        )
+
+    def _append_log_to_text(self, ev: LogEvent):
+        ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
+        lvl = ev.level.upper()
+        line = f"{ts} {emoji(lvl)} [{lvl}] {ev.msg}\n"
 
         self.txt_logs.configure(state="normal")
         start = self.txt_logs.index("end-1c")
         self.txt_logs.insert("end", line)
         end = self.txt_logs.index("end-1c")
 
-        # Tag by level, fallback to INFO
-        tag = lvl if lvl in ("INFO", "OK", "WARN", "ERROR", "START", "STOP", "ZIP", "FOLDER", "CLEAN") else "INFO"
+        tag = lvl if lvl in LEVEL_EMOJI else "INFO"
         self.txt_logs.tag_add(tag, start, end)
-
         self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
 
-        self.sb_right.set(time.strftime("%Y-%m-%d %H:%M:%S"))
+    def _append_log_direct(self, level: str, msg: str):
+        # Inserta sin store/counters (para acciones UI)
+        ts = time.strftime("%H:%M:%S")
+        lvl = level.upper()
+        line = f"{ts} {emoji(lvl)} [{lvl}] {msg}\n"
+
+        self.txt_logs.configure(state="normal")
+        start = self.txt_logs.index("end-1c")
+        self.txt_logs.insert("end", line)
+        end = self.txt_logs.index("end-1c")
+        tag = lvl if lvl in LEVEL_EMOJI else "INFO"
+        self.txt_logs.tag_add(tag, start, end)
+        self.txt_logs.see("end")
+        self.txt_logs.configure(state="disabled")
+
+    def refresh_logs_view(self):
+        # Re-render completo según filtros actuales
+        self.txt_logs.configure(state="normal")
+        self.txt_logs.delete("1.0", "end")
+        self.txt_logs.configure(state="disabled")
+
+        for ev in self._log_store:
+            if self._level_visible(ev.level):
+                self._append_log_to_text(ev)
+
+    def _push_recent_event(self, ev: LogEvent):
+        ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
+        lvl = ev.level.upper()
+        msg = ev.msg
+        # Insert on top
+        iid = self.tree.insert("", 0, values=(ts, f"{emoji(lvl)} {lvl}", msg))
+        # Trim
+        children = self.tree.get_children()
+        if len(children) > self._max_recent:
+            for iid2 in children[self._max_recent:]:
+                self.tree.delete(iid2)
 
     # ---------- Close
     def on_close(self):
