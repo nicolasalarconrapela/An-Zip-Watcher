@@ -6,5 +6,6 @@
   "poll_settle_seconds": 1.0,
   "max_settle_tries": 30,
   "scan_interval_seconds": 0.5,
-  "max_recent_events": 50
+  "max_recent_events": 50,
+  "max_log_store": 5000
 }

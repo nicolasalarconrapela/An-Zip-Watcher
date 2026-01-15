@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import queue
 import threading
@@ -8,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from enum import Enum
 from typing import Optional, Dict, Tuple, Callable
+from collections import deque
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -43,6 +46,7 @@ DEFAULT_POLL_SECONDS = 1.0
 DEFAULT_MAX_SETTLE_TRIES = 30
 DEFAULT_SCAN_INTERVAL = 0.5
 DEFAULT_MAX_RECENT_EVENTS = 50
+DEFAULT_MAX_LOG_STORE = 5000  # <-- NUEVO: límite de logs en memoria
 MIN_SCAN_INTERVAL = 0.2
 
 DEFAULT_SETTINGS = {
@@ -54,6 +58,7 @@ DEFAULT_SETTINGS = {
     "max_settle_tries": DEFAULT_MAX_SETTLE_TRIES,
     "scan_interval_seconds": DEFAULT_SCAN_INTERVAL,
     "max_recent_events": DEFAULT_MAX_RECENT_EVENTS,
+    "max_log_store": DEFAULT_MAX_LOG_STORE,  # <-- NUEVO
 }
 
 
@@ -319,7 +324,6 @@ class WatcherThread(threading.Thread):
                             self.seen.add(fp)
                             process_zip(p, watch_dir, settings, self.emit)
                     except FileNotFoundError:
-                        # ZIP fue eliminado entre iterdir() y stat()
                         continue
                     except Exception as e:
                         self.emit("WARN", f"Error procesando {p.name}: {e}")
@@ -350,8 +354,9 @@ class ZipWatcherApp(tk.Tk):
         self._stop_event = threading.Event()
         self._worker: WatcherThread | None = None
 
-        # store para filtros/busqueda/export
-        self._log_store: list[LogEvent] = []
+        # store para logs (LIMITADO con deque)
+        self._max_log_store = int(self.settings.get("max_log_store", DEFAULT_MAX_LOG_STORE))
+        self._log_store: deque[LogEvent] = deque(maxlen=self._max_log_store)
 
         # counters
         self._count_info = 0
@@ -370,7 +375,7 @@ class ZipWatcherApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._set_status("Listo", "idle")
-        
+
         # Bind redimensionamiento para ajustar wraplength dinámicamente
         self.bind("<Configure>", self._on_resize)
 
@@ -478,7 +483,16 @@ class ZipWatcherApp(tk.Tk):
 
         ttk.Label(dash, textvariable=self.dash_state, background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w")
         ttk.Label(dash, textvariable=self.dash_watch, background="#ffffff", foreground="#374151").pack(anchor="w", pady=(6, 0))
-        ttk.Label(dash, textvariable=self.dash_subs, background="#ffffff", foreground="#6b7280", justify="left").pack(anchor="w", pady=(6, 0), fill="x")
+
+        # IMPORTANTE: guardamos referencia para wraplength dinámico
+        self.dash_subs_label = ttk.Label(
+            dash,
+            textvariable=self.dash_subs,
+            background="#ffffff",
+            foreground="#6b7280",
+            justify="left"
+        )
+        self.dash_subs_label.pack(anchor="w", pady=(6, 0), fill="x")
 
         self.counts_var = tk.StringVar(value="INFO: 0   OK: 0   WARN: 0   ERROR: 0")
         ttk.Label(dash, textvariable=self.counts_var, background="#ffffff", foreground="#111827", font=("Segoe UI", 11)).pack(anchor="w", pady=(10, 0))
@@ -517,8 +531,12 @@ class ZipWatcherApp(tk.Tk):
         field(grid, "max_settle_tries", self.var_tries).grid(row=0, column=1, sticky="w", padx=(0, 18))
         field(grid, "scan_interval_seconds", self.var_scan).grid(row=0, column=2, sticky="w")
 
-        ttk.Label(cfg, text="Seguridad: no existe carpeta por defecto. Debe definirse explícitamente.",
-                  background="#ffffff", foreground="#6b7280").pack(anchor="w")
+        ttk.Label(
+            cfg,
+            text="Seguridad: no existe carpeta por defecto. Debe definirse explícitamente.",
+            background="#ffffff",
+            foreground="#6b7280"
+        ).pack(anchor="w")
 
         # -------- Activity / Maintenance card (right)
         self.card_activity = ttk.Frame(right_col, style="Card.TFrame")
@@ -531,7 +549,7 @@ class ZipWatcherApp(tk.Tk):
         top.pack(fill="x")
         ttk.Label(top, text="Actividad y mantenimiento", style="H1.TLabel").pack(side="left")
 
-        # Maintenance buttons en una fila secundaria (separada)
+        # Maintenance buttons
         maintenance_row = ttk.Frame(act, style="Card.TFrame")
         maintenance_row.pack(fill="x", pady=(8, 0))
 
@@ -550,7 +568,7 @@ class ZipWatcherApp(tk.Tk):
         self.btn_empty_trash = ttk.Button(maintenance_row, text="🗑️ Vaciar Trash", command=self.empty_trash)
         self.btn_empty_trash.pack(side="right", padx=(4, 0))
 
-        # Logs controls (row 1: acciones)
+        # Logs controls (row 1)
         controls_row1 = ttk.Frame(act, style="Card.TFrame")
         controls_row1.pack(fill="x", pady=(12, 6))
 
@@ -567,7 +585,6 @@ class ZipWatcherApp(tk.Tk):
         controls_row2 = ttk.Frame(act, style="Card.TFrame")
         controls_row2.pack(fill="x", pady=(0, 8))
 
-        # Filters
         self.filter_info = tk.BooleanVar(value=True)
         self.filter_ok = tk.BooleanVar(value=True)
         self.filter_warn = tk.BooleanVar(value=True)
@@ -587,12 +604,11 @@ class ZipWatcherApp(tk.Tk):
         # Search
         search = ttk.Frame(act, style="Card.TFrame")
         search.pack(fill="x", pady=(10, 10))
-        
-        # Fila de búsqueda
+
         search_label_row = ttk.Frame(search, style="Card.TFrame")
         search_label_row.pack(fill="x", pady=(0, 4))
         ttk.Label(search_label_row, text="Buscar en logs:", background="#ffffff").pack(side="left")
-        
+
         search_input_row = ttk.Frame(search, style="Card.TFrame")
         search_input_row.pack(fill="x")
         self.search_var = tk.StringVar(value="")
@@ -604,15 +620,13 @@ class ZipWatcherApp(tk.Tk):
         split = ttk.PanedWindow(act, orient="vertical")
         split.pack(fill="both", expand=True)
 
-        # Logs text with scrollbars
         logs_frame = ttk.Frame(split, style="Card.TFrame")
-        
-        # Scrollbars
+
         scrollbar_y = ttk.Scrollbar(logs_frame)
         scrollbar_y.pack(side="right", fill="y")
         scrollbar_x = ttk.Scrollbar(logs_frame, orient="horizontal")
         scrollbar_x.pack(side="bottom", fill="x")
-        
+
         self.txt_logs = tk.Text(
             logs_frame,
             height=16,
@@ -629,11 +643,11 @@ class ZipWatcherApp(tk.Tk):
         )
         self.txt_logs.pack(side="left", fill="both", expand=True)
         self.txt_logs.configure(state="disabled")
-        
+
         scrollbar_y.config(command=self.txt_logs.yview)
         scrollbar_x.config(command=self.txt_logs.xview)
 
-        # Tags with improved colors and styling
+        # Tags
         self.txt_logs.tag_config("INFO", foreground="#60a5fa", background="#0f172a")
         self.txt_logs.tag_config("OK", foreground="#4ade80", background="#0b4620")
         self.txt_logs.tag_config("WARN", foreground="#facc15", background="#4a3c0a")
@@ -656,10 +670,9 @@ class ZipWatcherApp(tk.Tk):
         self.tree.heading("time", text="Hora")
         self.tree.heading("level", text="Nivel")
         self.tree.heading("msg", text="Mensaje")
-        # Columnas responsive (sin ancho fijo para "msg")
         self.tree.column("time", width=80, anchor="w")
         self.tree.column("level", width=70, anchor="w")
-        self.tree.column("msg", anchor="w")  # Sin ancho fijo - se expande
+        self.tree.column("msg", anchor="w")
         self.tree.pack(fill="both", expand=True, padx=8, pady=8)
 
         split.add(logs_frame, weight=2)
@@ -693,40 +706,28 @@ class ZipWatcherApp(tk.Tk):
 
         self.side_paths = tk.StringVar(value="(sin carpeta configurada)")
         ttk.Label(self.sidebar, text="Rutas:", background="#111827", foreground="#9ca3af").pack(anchor="w", padx=14)
-        ttk.Label(self.sidebar, textvariable=self.side_paths, background="#111827", foreground="#d1d5db",
-                  wraplength=210, justify="left").pack(anchor="w", padx=14, pady=(4, 0))
+        ttk.Label(
+            self.sidebar,
+            textvariable=self.side_paths,
+            background="#111827",
+            foreground="#d1d5db",
+            wraplength=210,
+            justify="left"
+        ).pack(anchor="w", padx=14, pady=(4, 0))
 
     # ---------- Event Handlers
     def _on_resize(self, event):
         """Ajusta dinámicamente wraplength cuando se redimensiona."""
-        if hasattr(self, 'dash_subs_label') and event.widget == self:
-            available_width = self.winfo_width() - 350
-            if available_width > 100:
-                self.dash_subs_label.configure(wraplength=max(200, available_width // 2))
-
-    # ---------- Style
-    def _build_style(self):
-        style = ttk.Style(self)
+        if event.widget != self:
+            return
+        # Ajuste simple: mitad del ancho disponible aprox.
+        available_width = max(200, self.winfo_width() // 2)
         try:
-            style.theme_use("vista")
+            self.dash_subs_label.configure(wraplength=available_width)
         except Exception:
-            try:
-                style.theme_use("clam")
-            except Exception:
-                pass
+            pass
 
-        style.configure("App.TFrame", background="#f6f7fb")
-        style.configure("Sidebar.TFrame", background="#111827")
-        style.configure("Toolbar.TFrame", background="#ffffff")
-        style.configure("Card.TFrame", background="#ffffff", relief="solid", borderwidth=1)
-        style.configure("H1.TLabel", font=("Segoe UI", 16, "bold"), background="#ffffff")
-        style.configure("Muted.TLabel", foreground="#6b7280", background="#ffffff")
-        style.configure("SidebarTitle.TLabel", foreground="#ffffff", background="#111827", font=("Segoe UI", 12, "bold"))
-        style.configure("Status.TLabel", background="#ffffff")
-        style.configure("Primary.TButton", padding=(14, 10))
-        style.configure("Danger.TButton", padding=(14, 10))
-        style.configure("Ghost.TButton", padding=(12, 10))
-
+    # ---------- Status helpers
     def _set_status(self, text: str, pill: str):
         self.status_text.set(text)
         self.status_pill.set(pill.upper())
@@ -739,7 +740,7 @@ class ZipWatcherApp(tk.Tk):
         elif status == UIStatus.STOPPING.value:
             self.side_info.set("Estado: Deteniendo…")
             self.dash_state.set("Estado: Deteniendo…")
-        else:  # idle
+        else:
             self.side_info.set("Estado: Parado")
             self.dash_state.set("Estado: Parado")
 
@@ -750,7 +751,7 @@ class ZipWatcherApp(tk.Tk):
         return dict(self.settings)
 
     def emit(self, level: str, msg: str):
-        """Envía un evento de log a la cola."""
+        """Envía un evento de log a la cola (thread-safe)."""
         ev = LogEvent(level=level, msg=msg, ts=time.time())
         self._log_queue.put(ev)
 
@@ -776,7 +777,6 @@ class ZipWatcherApp(tk.Tk):
         return None
 
     def _get_all_paths(self) -> dict[str, Optional[Path]]:
-        """Calcula todas las rutas de una sola vez."""
         wd = self._watch_dir()
         if wd is None:
             return {"watch": None, "extracted": None, "output": None, "processed": None, "trash": None}
@@ -789,24 +789,20 @@ class ZipWatcherApp(tk.Tk):
         }
 
     def _refresh_paths_display(self):
-        """Actualiza ambos paneles (sidebar + dashboard) en una sola pasada."""
         paths = self._get_all_paths()
 
         if paths["watch"] is None:
-            # Sin carpeta configurada
             self.side_paths.set("(sin carpeta configurada)")
             self.dash_watch.set("(sin configurar)")
             self.dash_subs.set("")
             return
 
-        # Sidebar
         self.side_paths.set(
             f"{paths['watch']}\n\nextracted:\n{paths['extracted']}\n\n"
             f"output:\n{paths['output']}\n\nprocessed:\n{paths['processed']}\n\n"
             f"Trash:\n{paths['trash']}"
         )
 
-        # Dashboard
         self.dash_watch.set(f"Carpeta de escucha: {paths['watch']}")
         self.dash_subs.set(
             f"Subcarpetas: extracted / output / processed / Trash\n"
@@ -815,6 +811,10 @@ class ZipWatcherApp(tk.Tk):
             f"processed: {paths['processed']}\n"
             f"Trash: {paths['trash']}"
         )
+
+    # Compat: antes llamabas a _refresh_dashboard_paths, ahora lo mapeamos
+    def _refresh_dashboard_paths(self):
+        self._refresh_paths_display()
 
     # ---------- Config load/save
     def _load_to_form(self):
@@ -834,7 +834,6 @@ class ZipWatcherApp(tk.Tk):
         if not watch_dir:
             return False, "La carpeta de escucha es obligatoria (por seguridad)."
 
-        # Validar que la ruta sea accesible
         try:
             path = Path(watch_dir).expanduser().resolve()
             if not path.exists():
@@ -898,7 +897,6 @@ class ZipWatcherApp(tk.Tk):
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
 
-        # Bloquea mantenimiento mientras corre (evita carreras)
         self._set_maintenance_enabled(False)
 
         self._set_status("En ejecución", UIStatus.RUNNING.value)
@@ -1001,7 +999,6 @@ class ZipWatcherApp(tk.Tk):
             try:
                 dest = batch_dir / p.name
                 if dest.exists():
-                    # colisión
                     suffix = p.suffix if p.is_file() else ""
                     stem = p.stem if p.is_file() else p.name
                     dest = batch_dir / f"{stem}__{int(time.time())}{suffix}"
@@ -1061,7 +1058,6 @@ class ZipWatcherApp(tk.Tk):
         prd = self._dir("processed")
         assert trash is not None and outd is not None and exd is not None and prd is not None
 
-        # Conteo previo
         counts = []
         for name, d in (("output", outd), ("extracted", exd), ("processed", prd)):
             n = len(list(d.iterdir())) if d.exists() else 0
@@ -1117,7 +1113,6 @@ class ZipWatcherApp(tk.Tk):
             messagebox.showinfo("Trash", "Trash está vacío.")
             return
 
-        # Doble confirmación: esto sí elimina definitivamente
         if not messagebox.askyesno(
             "Confirmar",
             f"Esto eliminará DEFINITIVAMENTE {len(items)} elementos dentro de:\n{trash}\n\n¿Continuar?"
@@ -1145,6 +1140,20 @@ class ZipWatcherApp(tk.Tk):
 
     # ========= Logs UI =========
 
+    def _bucket_for_level(self, level: str) -> str:
+        return COUNT_BUCKET.get(level.upper(), "INFO")
+
+    def _adjust_counts_for_event(self, ev: LogEvent, delta: int):
+        bucket = self._bucket_for_level(ev.level)
+        if bucket == "INFO":
+            self._count_info += delta
+        elif bucket == "OK":
+            self._count_ok += delta
+        elif bucket == "WARN":
+            self._count_warn += delta
+        elif bucket == "ERROR":
+            self._count_error += delta
+
     def clear_logs_only(self):
         # Limpia UI + store + counters (NO toca filesystem)
         self._log_store.clear()
@@ -1155,10 +1164,8 @@ class ZipWatcherApp(tk.Tk):
         self.txt_logs.delete("1.0", "end")
         self.txt_logs.configure(state="disabled")
 
-        # mensaje informativo directo (sin store)
         self._append_log_direct("SEARCH", "Logs limpiados (solo UI).")
 
-        # limpiar tabla recent
         for iid in self.tree.get_children():
             self.tree.delete(iid)
 
@@ -1167,14 +1174,14 @@ class ZipWatcherApp(tk.Tk):
         self.txt_logs.configure(state="normal")
         text = self.txt_logs.get("1.0", "end-1c")
         self.txt_logs.configure(state="disabled")
-        
+
         if not text.strip():
             messagebox.showwarning("Sin logs", "No hay logs para copiar.")
             return
-            
+
         self.clipboard_clear()
         self.clipboard_append(text)
-        
+
         lines = len(text.split('\n'))
         self.emit("OK", f"Logs copiados al portapapeles ({lines} líneas).")
 
@@ -1187,13 +1194,12 @@ class ZipWatcherApp(tk.Tk):
         )
         if not path:
             return
-        
+
         try:
             self.txt_logs.configure(state="normal")
             text = self.txt_logs.get("1.0", "end-1c")
             self.txt_logs.configure(state="disabled")
-            
-            # Agregar encabezado
+
             header = f"""
 ================================================================================
                          ZIP WATCHER - REPORTE DE LOGS
@@ -1204,8 +1210,7 @@ Directorio: {self.settings.get('watch_dir', 'N/A')}
 ================================================================================
 
 """
-            
-            # Agregar resumen
+
             summary = f"""
 RESUMEN:
   - INFO:   {self._count_info:5} eventos
@@ -1218,9 +1223,8 @@ LOG DETALLADO:
 ================================================================================
 
 """
-            
-            content = header + summary + text + "\n\n" + "="*80 + "\nFin del reporte\n"
-            
+
+            content = header + summary + text + "\n\n" + "=" * 80 + "\nFin del reporte\n"
             Path(path).write_text(content, encoding="utf-8")
             self.emit("OK", f"Logs exportados a {path}")
         except Exception as e:
@@ -1233,7 +1237,6 @@ LOG DETALLADO:
             self.refresh_logs_view()
             return
 
-        # Re-render con filtro adicional (texto)
         self.txt_logs.configure(state="normal")
         self.txt_logs.delete("1.0", "end")
         self.txt_logs.configure(state="disabled")
@@ -1248,41 +1251,69 @@ LOG DETALLADO:
 
         self.emit("SEARCH", f"Búsqueda '{q}': {hits} coincidencias (sobre vista filtrada).")
 
-    # ---------- Log pump + rendering
+    # ---------- Log pump + rendering (BATCH)
     def _tick_logs(self):
+        drained: list[LogEvent] = []
         try:
             while True:
-                ev = self._log_queue.get_nowait()
-                self._handle_log_event(ev)
+                drained.append(self._log_queue.get_nowait())
         except queue.Empty:
             pass
+
+        if drained:
+            self._handle_log_events_batch(drained)
+
         self.after(120, self._tick_logs)
 
-    def _handle_log_event(self, ev: LogEvent):
-        # store + counters
-        self._log_store.append(ev)
-        bucket = COUNT_BUCKET.get(ev.level, "INFO")
-        if bucket == "INFO":
-            self._count_info += 1
-        elif bucket == "OK":
-            self._count_ok += 1
-        elif bucket == "WARN":
-            self._count_warn += 1
-        elif bucket == "ERROR":
-            self._count_error += 1
+    def _handle_log_events_batch(self, events: list[LogEvent]):
+        visible_events: list[LogEvent] = []
+
+        for ev in events:
+            was_full = (len(self._log_store) == self._log_store.maxlen)
+            expelled = self._log_store[0] if was_full and len(self._log_store) > 0 else None
+
+            self._log_store.append(ev)
+
+            if expelled is not None:
+                self._adjust_counts_for_event(expelled, -1)
+            self._adjust_counts_for_event(ev, +1)
+
+            if self._level_visible(ev.level):
+                visible_events.append(ev)
+
+            self._push_recent_event(ev)
+
         self._update_counts_label()
-
-        # render to text if visible
-        if self._level_visible(ev.level):
-            self._append_log_to_text(ev)
-
-        # recent events table
-        self._push_recent_event(ev)
-
-        # dashboard refresh (ruta + subcarpetas)
         self._refresh_dashboard_paths()
-
         self.sb_right.set(time.strftime("%Y-%m-%d %H:%M:%S"))
+
+        if visible_events:
+            self._append_logs_to_text_batch(visible_events)
+
+    def _is_user_at_bottom(self) -> bool:
+        first, last = self.txt_logs.yview()
+        return last > 0.98
+
+    def _append_logs_to_text_batch(self, events: list[LogEvent]):
+        auto_scroll = self._is_user_at_bottom()
+
+        self.txt_logs.configure(state="normal")
+        for ev in events:
+            ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
+            lvl = ev.level.upper()
+            line = f"[{ts}] {lvl:8} | {ev.msg}\n"
+
+            start = self.txt_logs.index("end-1c")
+            self.txt_logs.insert("end", line)
+            end = self.txt_logs.index("end-1c")
+
+            tag = lvl if lvl in LEVEL_EMOJI else "INFO"
+            self.txt_logs.tag_add(tag, start, end)
+
+        if auto_scroll:
+            self.txt_logs.see("end")
+
+        self.txt_logs.configure(state="disabled")
 
     def _update_counts_label(self):
         self.counts_var.set(
@@ -1290,11 +1321,12 @@ LOG DETALLADO:
         )
 
     def _append_log_to_text(self, ev: LogEvent):
+        # Para refresh/search (menos frecuente). El batch es para el flujo normal.
         ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
         lvl = ev.level.upper()
-        
-        # Mejor formato con separador y más espaciado
         line = f"[{ts}] {lvl:8} | {ev.msg}\n"
+
+        auto_scroll = self._is_user_at_bottom()
 
         self.txt_logs.configure(state="normal")
         start = self.txt_logs.index("end-1c")
@@ -1303,7 +1335,8 @@ LOG DETALLADO:
 
         tag = lvl if lvl in LEVEL_EMOJI else "INFO"
         self.txt_logs.tag_add(tag, start, end)
-        self.txt_logs.see("end")
+        if auto_scroll:
+            self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
 
     def _append_log_direct(self, level: str, msg: str):
@@ -1312,13 +1345,16 @@ LOG DETALLADO:
         lvl = level.upper()
         line = f"{ts} {emoji(lvl)} [{lvl}] {msg}\n"
 
+        auto_scroll = self._is_user_at_bottom()
+
         self.txt_logs.configure(state="normal")
         start = self.txt_logs.index("end-1c")
         self.txt_logs.insert("end", line)
         end = self.txt_logs.index("end-1c")
         tag = lvl if lvl in LEVEL_EMOJI else "INFO"
         self.txt_logs.tag_add(tag, start, end)
-        self.txt_logs.see("end")
+        if auto_scroll:
+            self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
 
     def refresh_logs_view(self):
@@ -1335,9 +1371,7 @@ LOG DETALLADO:
         ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
         lvl = ev.level.upper()
         msg = ev.msg
-        # Insert on top
         iid = self.tree.insert("", 0, values=(ts, f"{emoji(lvl)} {lvl}", msg))
-        # Trim
         children = self.tree.get_children()
         if len(children) > self._max_recent:
             for iid2 in children[self._max_recent:]:
