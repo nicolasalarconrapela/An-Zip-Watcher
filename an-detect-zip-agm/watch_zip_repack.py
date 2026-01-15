@@ -6,9 +6,22 @@ import shutil
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from enum import Enum
+from typing import Optional, Dict, Tuple, Callable
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+
+# =========================
+# Constants & Enums
+# =========================
+
+class UIStatus(Enum):
+    """Estados de la interfaz."""
+    IDLE = "idle"
+    RUNNING = "running"
+    STOPPING = "stopping"
 
 
 # =========================
@@ -21,15 +34,26 @@ def app_dir() -> Path:
 
 SETTINGS_PATH = app_dir() / "settings.json"
 
+# Default values for settings
+DEFAULT_EXTRACT_SUBDIR = "extracted"
+DEFAULT_OUTPUT_SUBDIR = "output"
+DEFAULT_PROCESSED_SUBDIR = "processed"
+DEFAULT_TRASH_SUBDIR = "Trash"
+DEFAULT_POLL_SECONDS = 1.0
+DEFAULT_MAX_SETTLE_TRIES = 30
+DEFAULT_SCAN_INTERVAL = 0.5
+DEFAULT_MAX_RECENT_EVENTS = 50
+MIN_SCAN_INTERVAL = 0.2
+
 DEFAULT_SETTINGS = {
     "watch_dir": "",
-    "extract_subdir": "extracted",
-    "output_subdir": "output",
-    "processed_subdir": "processed",
-    "poll_settle_seconds": 1.0,
-    "max_settle_tries": 30,
-    "scan_interval_seconds": 0.5,
-    "max_recent_events": 50,
+    "extract_subdir": DEFAULT_EXTRACT_SUBDIR,
+    "output_subdir": DEFAULT_OUTPUT_SUBDIR,
+    "processed_subdir": DEFAULT_PROCESSED_SUBDIR,
+    "poll_settle_seconds": DEFAULT_POLL_SECONDS,
+    "max_settle_tries": DEFAULT_MAX_SETTLE_TRIES,
+    "scan_interval_seconds": DEFAULT_SCAN_INTERVAL,
+    "max_recent_events": DEFAULT_MAX_RECENT_EVENTS,
 }
 
 
@@ -47,6 +71,7 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict) -> None:
+    """Guarda configuración en JSON."""
     SETTINGS_PATH.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False),
         encoding="utf-8"
@@ -98,10 +123,18 @@ def emoji(level: str) -> str:
 
 
 # =========================
+# Type Aliases
+# =========================
+
+EmitFunc = Callable[[str, str], None]
+
+
+# =========================
 # Core ZIP processing
 # =========================
 
 def wait_until_file_stable(file_path: Path, poll_seconds: float, max_tries: int) -> None:
+    """Espera hasta que el archivo se estabilice (tamaño no cambia)."""
     last_size = -1
     for _ in range(max_tries):
         if not file_path.exists():
@@ -115,6 +148,7 @@ def wait_until_file_stable(file_path: Path, poll_seconds: float, max_tries: int)
 
 
 def safe_move(src: Path, dest: Path) -> Path:
+    """Mueve src a dest, creando dest.parent si necesario."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     final_dest = dest
     if final_dest.exists():
@@ -124,74 +158,114 @@ def safe_move(src: Path, dest: Path) -> Path:
 
 
 def zip_directory(src_dir: Path, dest_zip: Path) -> None:
+    """Comprime recursivamente src_dir en dest_zip."""
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in src_dir.rglob("*"):
-            if p.is_file():
-                zf.write(p, p.relative_to(src_dir).as_posix())
-
-
-def process_zip(zip_path: Path, watch_dir: Path, settings: dict, emit) -> None:
-    poll_seconds = float(settings.get("poll_settle_seconds", 1.0))
-    max_tries = int(settings.get("max_settle_tries", 30))
-
-    extract_root = watch_dir / (settings.get("extract_subdir") or "extracted")
-    output_dir = watch_dir / (settings.get("output_subdir") or "output")
-    processed_dir = watch_dir / (settings.get("processed_subdir") or "processed")
-
-    for d in (extract_root, output_dir, processed_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    emit("ZIP", f"Detectado ZIP: {zip_path.name}")
-    wait_until_file_stable(zip_path, poll_seconds, max_tries)
-
-    # Validar ZIP
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.testzip()
+        with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            files_added = 0
+            for p in src_dir.rglob("*"):
+                if p.is_file():
+                    try:
+                        zf.write(p, p.relative_to(src_dir).as_posix())
+                        files_added += 1
+                    except Exception as e:
+                        raise IOError(f"Error añadiendo {p.name} al ZIP: {e}") from e
+        if files_added == 0:
+            raise ValueError(f"No se comprimió ningún archivo de {src_dir}")
+    except zipfile.BadZipFile as e:
+        raise IOError(f"Error creando ZIP en {dest_zip}: {e}") from e
     except Exception as e:
-        emit("WARN", f"ZIP inválido o no listo: {zip_path.name} -> {e}")
-        return
+        raise IOError(f"Error en zip_directory: {e}") from e
 
-    # Extraer en extracted/<stem> (si existe, añade timestamp)
-    extract_dir = extract_root / zip_path.stem
-    if extract_dir.exists():
-        extract_dir = extract_root / f"{zip_path.stem}__{int(time.time())}"
 
+def process_zip(zip_path: Path, watch_dir: Path, settings: dict, emit: EmitFunc) -> None:
+    """Procesa ZIP: extrae → comprime primera carpeta → mueve original."""
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(extract_dir)
-        emit("OK", f"Descomprimido en: {extract_dir}")
+        poll_seconds = float(settings.get("poll_settle_seconds", 1.0))
+        max_tries = int(settings.get("max_settle_tries", 30))
+
+        extract_root = watch_dir / (settings.get("extract_subdir") or "extracted")
+        output_dir = watch_dir / (settings.get("output_subdir") or "output")
+        processed_dir = watch_dir / (settings.get("processed_subdir") or "processed")
+
+        for d in (extract_root, output_dir, processed_dir):
+            d.mkdir(parents=True, exist_ok=True)
+
+        emit("ZIP", f"Detectado ZIP: {zip_path.name}")
+        wait_until_file_stable(zip_path, poll_seconds, max_tries)
+
+        # Validar ZIP
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                bad_file = zf.testzip()
+                if bad_file:
+                    emit("WARN", f"ZIP corrupto o incompleto: primer archivo dañado {bad_file}")
+                    return
+        except zipfile.BadZipFile as e:
+            emit("WARN", f"ZIP no válido: {zip_path.name} -> {e}")
+            return
+        except Exception as e:
+            emit("WARN", f"Error validando ZIP: {zip_path.name} -> {e}")
+            return
+
+        # Extraer en extracted/<stem>
+        extract_dir = extract_root / zip_path.stem
+        if extract_dir.exists():
+            extract_dir = extract_root / f"{zip_path.stem}__{int(time.time())}"
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+            emit("OK", f"Descomprimido en: {extract_dir}")
+        except zipfile.BadZipFile as e:
+            emit("ERROR", f"ZIP corrupto al descomprimir {zip_path.name}: {e}")
+            return
+        except PermissionError as e:
+            emit("ERROR", f"Permisos insuficientes para extraer {zip_path.name}: {e}")
+            return
+        except Exception as e:
+            emit("ERROR", f"Error descomprimiendo {zip_path.name}: {e}")
+            return
+
+        # Primera carpeta dentro del nodo descomprimido
+        folders = sorted(
+            [p for p in extract_dir.iterdir() if p.is_dir()],
+            key=lambda p: p.name.lower()
+        )
+        if not folders:
+            emit("WARN", f"No hay carpetas dentro de {extract_dir}. No se comprime nada.")
+            return
+
+        target_folder = folders[0]
+        emit("FOLDER", f"Carpeta objetivo: {target_folder.name}")
+
+        out_zip = output_dir / f"{target_folder.name}.zip"
+        if out_zip.exists():
+            out_zip = output_dir / f"{target_folder.name}__{int(time.time())}.zip"
+
+        try:
+            zip_directory(target_folder, out_zip)
+            emit("OK", f"Creado ZIP: {out_zip.name}")
+        except (IOError, ValueError) as e:
+            emit("ERROR", f"Error comprimiendo {target_folder}: {e}")
+            return
+        except Exception as e:
+            emit("ERROR", f"Error inesperado comprimiendo: {e}")
+            return
+
+        # Mover original a processed
+        try:
+            moved = safe_move(zip_path, processed_dir / zip_path.name)
+            emit("OK", f"Original movido a: {moved}")
+        except FileNotFoundError as e:
+            emit("WARN", f"ZIP ya no existe: {e}")
+        except PermissionError as e:
+            emit("WARN", f"Permisos insuficientes para mover: {e}")
+        except Exception as e:
+            emit("WARN", f"No se pudo mover el original: {e}")
+
     except Exception as e:
-        emit("ERROR", f"Error descomprimiendo {zip_path.name}: {e}")
-        return
-
-    # Primera carpeta dentro del nodo descomprimido
-    folders = sorted([p for p in extract_dir.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
-    if not folders:
-        emit("WARN", f"No hay carpetas dentro de {extract_dir}. No se comprime nada.")
-        return
-
-    target_folder = folders[0]
-    emit("FOLDER", f"Carpeta objetivo: {target_folder.name}")
-
-    out_zip = output_dir / f"{target_folder.name}.zip"
-    if out_zip.exists():
-        out_zip = output_dir / f"{target_folder.name}__{int(time.time())}.zip"
-
-    try:
-        zip_directory(target_folder, out_zip)
-        emit("OK", f"Creado ZIP: {out_zip.name}")
-    except Exception as e:
-        emit("ERROR", f"Error comprimiendo {target_folder}: {e}")
-        return
-
-    # Mover original a processed
-    try:
-        moved = safe_move(zip_path, processed_dir / zip_path.name)
-        emit("OK", f"Original movido a: {moved}")
-    except Exception as e:
-        emit("WARN", f"No se pudo mover el original: {e}")
+        emit("ERROR", f"Error crítico en process_zip: {e}")
 
 
 # =========================
@@ -199,12 +273,12 @@ def process_zip(zip_path: Path, watch_dir: Path, settings: dict, emit) -> None:
 # =========================
 
 class WatcherThread(threading.Thread):
-    def __init__(self, settings_getter, emit, stop_event: threading.Event):
+    def __init__(self, settings_getter: Callable[[], dict], emit: EmitFunc, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.settings_getter = settings_getter
         self.emit = emit
         self.stop_event = stop_event
-        self.seen = set()
+        self.seen: set[Tuple[str, int, int]] = set()
 
     def run(self):
         self.emit("START", "Watcher iniciado.")
@@ -217,23 +291,41 @@ class WatcherThread(threading.Thread):
                 time.sleep(max(0.2, scan_interval))
                 continue
 
-            watch_dir = Path(watch_dir_raw).expanduser().resolve()
-            watch_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                watch_dir = Path(watch_dir_raw).expanduser().resolve()
+                watch_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.emit("WARN", f"Error accediendo a directorio: {e}")
+                time.sleep(max(0.2, scan_interval))
+                continue
 
             try:
+                # Buscar solo archivos .zip una vez
+                zip_files = []
                 for p in watch_dir.iterdir():
                     if self.stop_event.is_set():
                         break
                     if p.is_file() and p.suffix.lower() == ".zip":
-                        try:
-                            st = p.stat()
-                            fp = (str(p), st.st_mtime_ns, st.st_size)
-                        except Exception:
-                            continue
-                        if fp in self.seen:
-                            continue
-                        self.seen.add(fp)
-                        process_zip(p, watch_dir, settings, self.emit)
+                        zip_files.append(p)
+
+                # Procesar cada ZIP con su stat en una pasada
+                for p in zip_files:
+                    if self.stop_event.is_set():
+                        break
+                    try:
+                        st = p.stat()
+                        fp = (str(p), st.st_mtime_ns, st.st_size)
+                        if fp not in self.seen:
+                            self.seen.add(fp)
+                            process_zip(p, watch_dir, settings, self.emit)
+                    except FileNotFoundError:
+                        # ZIP fue eliminado entre iterdir() y stat()
+                        continue
+                    except Exception as e:
+                        self.emit("WARN", f"Error procesando {p.name}: {e}")
+
+            except PermissionError:
+                self.emit("WARN", f"Permisos insuficientes en {watch_dir_raw}")
             except Exception as e:
                 self.emit("WARN", f"Error leyendo directorio: {e}")
 
@@ -278,6 +370,9 @@ class ZipWatcherApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._set_status("Listo", "idle")
+        
+        # Bind redimensionamiento para ajustar wraplength dinámicamente
+        self.bind("<Configure>", self._on_resize)
 
     # ---------- Style
     def _build_style(self):
@@ -311,7 +406,7 @@ class ZipWatcherApp(tk.Tk):
 
         # Sidebar
         self.sidebar = ttk.Frame(root, style="Sidebar.TFrame", width=240)
-        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack(side="left", fill="both", padx=0)
         self.sidebar.pack_propagate(False)
 
         # Main
@@ -383,7 +478,7 @@ class ZipWatcherApp(tk.Tk):
 
         ttk.Label(dash, textvariable=self.dash_state, background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w")
         ttk.Label(dash, textvariable=self.dash_watch, background="#ffffff", foreground="#374151").pack(anchor="w", pady=(6, 0))
-        ttk.Label(dash, textvariable=self.dash_subs, background="#ffffff", foreground="#6b7280", wraplength=520, justify="left").pack(anchor="w", pady=(6, 0))
+        ttk.Label(dash, textvariable=self.dash_subs, background="#ffffff", foreground="#6b7280", justify="left").pack(anchor="w", pady=(6, 0), fill="x")
 
         self.counts_var = tk.StringVar(value="INFO: 0   OK: 0   WARN: 0   ERROR: 0")
         ttk.Label(dash, textvariable=self.counts_var, background="#ffffff", foreground="#111827", font=("Segoe UI", 11)).pack(anchor="w", pady=(10, 0))
@@ -436,36 +531,41 @@ class ZipWatcherApp(tk.Tk):
         top.pack(fill="x")
         ttk.Label(top, text="Actividad y mantenimiento", style="H1.TLabel").pack(side="left")
 
-        # Maintenance buttons (filesystem) — separados, explícitos
-        self.btn_clean_all = ttk.Button(top, text="🧹 Limpiar TODO → Trash", command=self.clean_all_to_trash)
-        self.btn_clean_all.pack(side="right")
+        # Maintenance buttons en una fila secundaria (separada)
+        maintenance_row = ttk.Frame(act, style="Card.TFrame")
+        maintenance_row.pack(fill="x", pady=(8, 0))
 
-        self.btn_clean_output = ttk.Button(top, text="🧹 Output", command=lambda: self.clean_dir_to_trash("output"))
-        self.btn_clean_output.pack(side="right", padx=(0, 8))
+        self.btn_clean_all = ttk.Button(maintenance_row, text="🧹 Limpiar TODO → Trash", command=self.clean_all_to_trash)
+        self.btn_clean_all.pack(side="right", padx=(4, 0))
 
-        self.btn_clean_extracted = ttk.Button(top, text="🧹 Extracted", command=lambda: self.clean_dir_to_trash("extracted"))
-        self.btn_clean_extracted.pack(side="right", padx=(0, 8))
+        self.btn_clean_output = ttk.Button(maintenance_row, text="🧹 Output", command=lambda: self.clean_dir_to_trash("output"))
+        self.btn_clean_output.pack(side="right", padx=(4, 0))
 
-        self.btn_clean_processed = ttk.Button(top, text="🧹 Processed", command=lambda: self.clean_dir_to_trash("processed"))
-        self.btn_clean_processed.pack(side="right", padx=(0, 8))
+        self.btn_clean_extracted = ttk.Button(maintenance_row, text="🧹 Extracted", command=lambda: self.clean_dir_to_trash("extracted"))
+        self.btn_clean_extracted.pack(side="right", padx=(4, 0))
 
-        self.btn_empty_trash = ttk.Button(top, text="🗑️ Vaciar Trash", command=self.empty_trash)
-        self.btn_empty_trash.pack(side="right", padx=(0, 8))
+        self.btn_clean_processed = ttk.Button(maintenance_row, text="🧹 Processed", command=lambda: self.clean_dir_to_trash("processed"))
+        self.btn_clean_processed.pack(side="right", padx=(4, 0))
 
-        # Logs controls
-        controls = ttk.Frame(act, style="Card.TFrame")
-        controls.pack(fill="x", pady=(12, 8))
+        self.btn_empty_trash = ttk.Button(maintenance_row, text="🗑️ Vaciar Trash", command=self.empty_trash)
+        self.btn_empty_trash.pack(side="right", padx=(4, 0))
 
-        self.btn_clear_logs = ttk.Button(controls, text="🧽 Limpiar logs (UI)", command=self.clear_logs_only)
-        self.btn_clear_logs.pack(side="left")
+        # Logs controls (row 1: acciones)
+        controls_row1 = ttk.Frame(act, style="Card.TFrame")
+        controls_row1.pack(fill="x", pady=(12, 6))
 
-        self.btn_copy_logs = ttk.Button(controls, text="📋 Copiar", command=self.copy_logs)
-        self.btn_copy_logs.pack(side="left", padx=(8, 0))
+        self.btn_clear_logs = ttk.Button(controls_row1, text="🧽 Limpiar logs (UI)", command=self.clear_logs_only)
+        self.btn_clear_logs.pack(side="left", padx=(0, 4))
 
-        self.btn_export_logs = ttk.Button(controls, text="💾 Exportar…", command=self.export_logs)
-        self.btn_export_logs.pack(side="left", padx=(8, 0))
+        self.btn_copy_logs = ttk.Button(controls_row1, text="📋 Copiar", command=self.copy_logs)
+        self.btn_copy_logs.pack(side="left", padx=(4, 4))
 
-        ttk.Separator(controls, orient="vertical").pack(side="left", fill="y", padx=12)
+        self.btn_export_logs = ttk.Button(controls_row1, text="💾 Exportar…", command=self.export_logs)
+        self.btn_export_logs.pack(side="left", padx=(4, 0))
+
+        # Logs controls (row 2: filtros)
+        controls_row2 = ttk.Frame(act, style="Card.TFrame")
+        controls_row2.pack(fill="x", pady=(0, 8))
 
         # Filters
         self.filter_info = tk.BooleanVar(value=True)
@@ -473,25 +573,32 @@ class ZipWatcherApp(tk.Tk):
         self.filter_warn = tk.BooleanVar(value=True)
         self.filter_error = tk.BooleanVar(value=True)
 
-        ttk.Checkbutton(controls, text="ℹ️ INFO", variable=self.filter_info, command=self.refresh_logs_view).pack(side="left")
-        ttk.Checkbutton(controls, text="✅ OK", variable=self.filter_ok, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
-        ttk.Checkbutton(controls, text="⚠️ WARN", variable=self.filter_warn, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
-        ttk.Checkbutton(controls, text="❌ ERROR", variable=self.filter_error, command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(controls_row2, text="ℹ️ INFO", variable=self.filter_info, command=self.refresh_logs_view).pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(controls_row2, text="✅ OK", variable=self.filter_ok, command=self.refresh_logs_view).pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(controls_row2, text="⚠️ WARN", variable=self.filter_warn, command=self.refresh_logs_view).pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(controls_row2, text="❌ ERROR", variable=self.filter_error, command=self.refresh_logs_view).pack(side="left", padx=(0, 12))
 
-        self.btn_only_issues = ttk.Button(controls, text="Solo WARN+ERROR", command=self.only_warn_error)
-        self.btn_only_issues.pack(side="left", padx=(12, 0))
+        self.btn_only_issues = ttk.Button(controls_row2, text="Solo WARN+ERROR", command=self.only_warn_error)
+        self.btn_only_issues.pack(side="left", padx=(0, 4))
 
-        self.btn_show_all = ttk.Button(controls, text="Mostrar todo", command=self.show_all_levels)
-        self.btn_show_all.pack(side="left", padx=(8, 0))
+        self.btn_show_all = ttk.Button(controls_row2, text="Mostrar todo", command=self.show_all_levels)
+        self.btn_show_all.pack(side="left", padx=(4, 0))
 
         # Search
         search = ttk.Frame(act, style="Card.TFrame")
-        search.pack(fill="x", pady=(0, 10))
-        ttk.Label(search, text="Buscar en logs:", background="#ffffff").pack(side="left")
+        search.pack(fill="x", pady=(10, 10))
+        
+        # Fila de búsqueda
+        search_label_row = ttk.Frame(search, style="Card.TFrame")
+        search_label_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(search_label_row, text="Buscar en logs:", background="#ffffff").pack(side="left")
+        
+        search_input_row = ttk.Frame(search, style="Card.TFrame")
+        search_input_row.pack(fill="x")
         self.search_var = tk.StringVar(value="")
-        ttk.Entry(search, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(8, 8))
-        ttk.Button(search, text="🔎 Buscar", command=self.search_logs).pack(side="left")
-        ttk.Button(search, text="Reset", command=self.refresh_logs_view).pack(side="left", padx=(8, 0))
+        ttk.Entry(search_input_row, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(search_input_row, text="🔎 Buscar", command=self.search_logs).pack(side="left", padx=(0, 4))
+        ttk.Button(search_input_row, text="Reset", command=self.refresh_logs_view).pack(side="left")
 
         # Split: logs + recent events
         split = ttk.PanedWindow(act, orient="vertical")
@@ -535,12 +642,13 @@ class ZipWatcherApp(tk.Tk):
         self.tree.heading("time", text="Hora")
         self.tree.heading("level", text="Nivel")
         self.tree.heading("msg", text="Mensaje")
-        self.tree.column("time", width=90, anchor="w")
-        self.tree.column("level", width=80, anchor="w")
-        self.tree.column("msg", width=700, anchor="w")
+        # Columnas responsive (sin ancho fijo para "msg")
+        self.tree.column("time", width=80, anchor="w")
+        self.tree.column("level", width=70, anchor="w")
+        self.tree.column("msg", anchor="w")  # Sin ancho fijo - se expande
         self.tree.pack(fill="both", expand=True, padx=8, pady=8)
 
-        split.add(logs_frame, weight=3)
+        split.add(logs_frame, weight=2)
         split.add(table_frame, weight=1)
 
         # Sidebar
@@ -574,22 +682,50 @@ class ZipWatcherApp(tk.Tk):
         ttk.Label(self.sidebar, textvariable=self.side_paths, background="#111827", foreground="#d1d5db",
                   wraplength=210, justify="left").pack(anchor="w", padx=14, pady=(4, 0))
 
-    # ---------- Helpers
-    def emit(self, level: str, msg: str):
-        self._log_queue.put(LogEvent(level=level.upper(), msg=msg, ts=time.time()))
+    # ---------- Event Handlers
+    def _on_resize(self, event):
+        """Ajusta dinámicamente wraplength cuando se redimensiona."""
+        if hasattr(self, 'dash_subs_label') and event.widget == self:
+            available_width = self.winfo_width() - 350
+            if available_width > 100:
+                self.dash_subs_label.configure(wraplength=max(200, available_width // 2))
+
+    # ---------- Style
+    def _build_style(self):
+        style = ttk.Style(self)
+        try:
+            style.theme_use("vista")
+        except Exception:
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+
+        style.configure("App.TFrame", background="#f6f7fb")
+        style.configure("Sidebar.TFrame", background="#111827")
+        style.configure("Toolbar.TFrame", background="#ffffff")
+        style.configure("Card.TFrame", background="#ffffff", relief="solid", borderwidth=1)
+        style.configure("H1.TLabel", font=("Segoe UI", 16, "bold"), background="#ffffff")
+        style.configure("Muted.TLabel", foreground="#6b7280", background="#ffffff")
+        style.configure("SidebarTitle.TLabel", foreground="#ffffff", background="#111827", font=("Segoe UI", 12, "bold"))
+        style.configure("Status.TLabel", background="#ffffff")
+        style.configure("Primary.TButton", padding=(14, 10))
+        style.configure("Danger.TButton", padding=(14, 10))
+        style.configure("Ghost.TButton", padding=(12, 10))
 
     def _set_status(self, text: str, pill: str):
         self.status_text.set(text)
         self.status_pill.set(pill.upper())
         self.sb_right.set(time.strftime("%Y-%m-%d %H:%M:%S"))
 
-        if pill.lower() == "running":
+        status = pill.lower()
+        if status == UIStatus.RUNNING.value:
             self.side_info.set("Estado: En ejecución")
             self.dash_state.set("Estado: En ejecución")
-        elif pill.lower() == "stopping":
+        elif status == UIStatus.STOPPING.value:
             self.side_info.set("Estado: Deteniendo…")
             self.dash_state.set("Estado: Deteniendo…")
-        else:
+        else:  # idle
             self.side_info.set("Estado: Parado")
             self.dash_state.set("Estado: Parado")
 
@@ -610,15 +746,56 @@ class ZipWatcherApp(tk.Tk):
         wd = self._watch_dir()
         if wd is None:
             return None
-        if key == "output":
-            return wd / (self.settings.get("output_subdir") or "output")
-        if key == "extracted":
-            return wd / (self.settings.get("extract_subdir") or "extracted")
-        if key == "processed":
-            return wd / (self.settings.get("processed_subdir") or "processed")
-        if key == "trash":
-            return wd / "Trash"
+        subdir_map = {
+            "output": self.settings.get("output_subdir") or "output",
+            "extracted": self.settings.get("extract_subdir") or "extracted",
+            "processed": self.settings.get("processed_subdir") or "processed",
+            "trash": "Trash",
+        }
+        if key in subdir_map:
+            return wd / subdir_map[key]
         return None
+
+    def _get_all_paths(self) -> dict[str, Optional[Path]]:
+        """Calcula todas las rutas de una sola vez."""
+        wd = self._watch_dir()
+        if wd is None:
+            return {"watch": None, "extracted": None, "output": None, "processed": None, "trash": None}
+        return {
+            "watch": wd,
+            "extracted": wd / (self.settings.get("extract_subdir") or "extracted"),
+            "output": wd / (self.settings.get("output_subdir") or "output"),
+            "processed": wd / (self.settings.get("processed_subdir") or "processed"),
+            "trash": wd / "Trash",
+        }
+
+    def _refresh_paths_display(self):
+        """Actualiza ambos paneles (sidebar + dashboard) en una sola pasada."""
+        paths = self._get_all_paths()
+
+        if paths["watch"] is None:
+            # Sin carpeta configurada
+            self.side_paths.set("(sin carpeta configurada)")
+            self.dash_watch.set("(sin configurar)")
+            self.dash_subs.set("")
+            return
+
+        # Sidebar
+        self.side_paths.set(
+            f"{paths['watch']}\n\nextracted:\n{paths['extracted']}\n\n"
+            f"output:\n{paths['output']}\n\nprocessed:\n{paths['processed']}\n\n"
+            f"Trash:\n{paths['trash']}"
+        )
+
+        # Dashboard
+        self.dash_watch.set(f"Carpeta de escucha: {paths['watch']}")
+        self.dash_subs.set(
+            f"Subcarpetas: extracted / output / processed / Trash\n"
+            f"extracted: {paths['extracted']}\n"
+            f"output: {paths['output']}\n"
+            f"processed: {paths['processed']}\n"
+            f"Trash: {paths['trash']}"
+        )
 
     # ---------- Config load/save
     def _load_to_form(self):
@@ -626,44 +803,7 @@ class ZipWatcherApp(tk.Tk):
         self.var_poll.set(str(self.settings.get("poll_settle_seconds", 1.0)))
         self.var_tries.set(str(self.settings.get("max_settle_tries", 30)))
         self.var_scan.set(str(self.settings.get("scan_interval_seconds", 0.5)))
-        self._refresh_sidebar_paths()
-        self._refresh_dashboard_paths()
-
-    def _refresh_sidebar_paths(self):
-        wd = self._watch_dir()
-        if wd is None:
-            self.side_paths.set("(sin carpeta configurada)")
-            self.dash_watch.set("(sin configurar)")
-            self.dash_subs.set("")
-            return
-
-        extracted = self._dir("extracted")
-        output = self._dir("output")
-        processed = self._dir("processed")
-        trash = self._dir("trash")
-        self.side_paths.set(
-            f"{wd}\n\nextracted:\n{extracted}\n\noutput:\n{output}\n\nprocessed:\n{processed}\n\nTrash:\n{trash}"
-        )
-
-    def _refresh_dashboard_paths(self):
-        wd = self._watch_dir()
-        if wd is None:
-            self.dash_watch.set("(sin configurar)")
-            self.dash_subs.set("")
-            return
-
-        extracted = self._dir("extracted")
-        output = self._dir("output")
-        processed = self._dir("processed")
-        trash = self._dir("trash")
-        self.dash_watch.set(f"Carpeta de escucha: {wd}")
-        self.dash_subs.set(
-            f"Subcarpetas: extracted / output / processed / Trash\n"
-            f"extracted: {extracted}\n"
-            f"output: {output}\n"
-            f"processed: {processed}\n"
-            f"Trash: {trash}"
-        )
+        self._refresh_paths_display()
 
     def browse_folder(self):
         path = filedialog.askdirectory(title="Selecciona carpeta de escucha")
@@ -675,6 +815,17 @@ class ZipWatcherApp(tk.Tk):
         if not watch_dir:
             return False, "La carpeta de escucha es obligatoria (por seguridad)."
 
+        # Validar que la ruta sea accesible
+        try:
+            path = Path(watch_dir).expanduser().resolve()
+            if not path.exists():
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except PermissionError:
+                    return False, f"Sin permisos para crear/acceder: {path}"
+        except Exception as e:
+            return False, f"Ruta inválida: {e}"
+
         try:
             poll = float(self.var_poll.get().strip())
             tries = int(self.var_tries.get().strip())
@@ -683,8 +834,10 @@ class ZipWatcherApp(tk.Tk):
                 return False, "poll_settle_seconds debe ser > 0"
             if tries <= 0:
                 return False, "max_settle_tries debe ser > 0"
-            if scan < 0.2:
-                return False, "scan_interval_seconds debe ser >= 0.2"
+            if scan < MIN_SCAN_INTERVAL:
+                return False, f"scan_interval_seconds debe ser >= {MIN_SCAN_INTERVAL}"
+        except ValueError as e:
+            return False, f"Parámetros inválidos (números esperados): {e}"
         except Exception as e:
             return False, f"Parámetros inválidos: {e}"
 
@@ -702,10 +855,10 @@ class ZipWatcherApp(tk.Tk):
         self.settings["scan_interval_seconds"] = float(self.var_scan.get().strip())
 
         save_settings(self.settings)
-        self._refresh_sidebar_paths()
-        self._refresh_dashboard_paths()
+        self._refresh_paths_display()
         self.emit("OK", f"Configuración guardada en {SETTINGS_PATH}")
-        self._set_status("Configuración guardada", "running" if self._is_running() else "idle")
+        status = UIStatus.RUNNING.value if self._is_running() else UIStatus.IDLE.value
+        self._set_status("Configuración guardada", status)
 
     # ---------- Start/Stop
     def start_watcher(self):
@@ -729,14 +882,14 @@ class ZipWatcherApp(tk.Tk):
         # Bloquea mantenimiento mientras corre (evita carreras)
         self._set_maintenance_enabled(False)
 
-        self._set_status("En ejecución", "running")
+        self._set_status("En ejecución", UIStatus.RUNNING.value)
         self.emit("START", "Monitorización activa.")
 
     def stop_watcher(self):
         if not self._is_running():
             return
         self._stop_event.set()
-        self._set_status("Deteniendo…", "stopping")
+        self._set_status("Deteniendo…", UIStatus.STOPPING.value)
         self.btn_stop.configure(state="disabled")
         self.btn_start.configure(state="disabled")
         self._set_maintenance_enabled(False)
@@ -750,7 +903,7 @@ class ZipWatcherApp(tk.Tk):
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self._set_maintenance_enabled(True)
-        self._set_status("Parado", "idle")
+        self._set_status("Parado", UIStatus.IDLE.value)
         self.emit("STOP", "Watcher parado.")
 
     def _set_maintenance_enabled(self, enabled: bool):
