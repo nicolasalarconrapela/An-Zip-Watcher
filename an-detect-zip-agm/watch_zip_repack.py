@@ -735,6 +735,11 @@ class ZipWatcherApp(tk.Tk):
     def settings_getter(self):
         return dict(self.settings)
 
+    def emit(self, level: str, msg: str):
+        """Envía un evento de log a la cola."""
+        ev = LogEvent(level=level, msg=msg, ts=time.time())
+        self._log_queue.put(ev)
+
     # ---------- Paths
     def _watch_dir(self) -> Path | None:
         wd = (self.settings.get("watch_dir") or "").strip()
