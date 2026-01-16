@@ -1,218 +1,77 @@
-# AN-DETECT-ZIP-AGM
+# An-Zip-Watcher
 
-A robust ZIP file detector and repacker application with real-time monitoring and GUI interface.
-
-**Current Version:** v1.0.0 (Production)
-
-## Features
-
-- 🔍 Real-time ZIP file detection and monitoring
-- 📦 Automatic ZIP file extraction and repacking
-- 🖥️ User-friendly GUI with tkinter
-- 📝 Event logging and history
-- ⚙️ Configurable settings (JSON-based)
-- 🔄 Queue-based architecture for reliable processing
-- 📊 Memory-efficient log storage
-- 🏗️ PyInstaller support for standalone executables
-- 🌍 Cross-platform (Windows, macOS, Linux)
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8 or higher
-- pip (Python package manager)
-
-### Required Dependencies
-
-```bash
-pip install watchdog
-```
-
-### Optional Dependencies (for building)
-
-```bash
-pip install pyinstaller>=6.0.0
-```
-
-## Usage
-
-### Running from Source
-
-```bash
-python watch_zip_repack.py
-```
-
-### Building Executable
-
-```bash
-python build.py
-```
-
-This will create a standalone executable in the `dist/` folder.
-
-## Version Information
-
-This project uses **Semantic Versioning (SemVer)** with automated version management tools.
-
-**Quick Links:**
-
-- 📚 [VERSION_TOOLS_GUIDE.md](docs/VERSION_TOOLS_GUIDE.md) - Complete guide to version scripts
-- 📖 [VERSIONING.md](docs/VERSIONING.md) - Complete versioning strategy and release process
-- 📝 [CHANGELOG.md](CHANGELOG.md) - All releases and changes history
-
-## Project Structure
-
-```bash
-an-detect-zip-agm/
-├── watch_zip_repack.py      # Main application
-├── build.py                 # Build script for executables
-├── version.py               # Version information
-├── settings.json            # Application configuration
-├── README.md                # This file
-├── CHANGELOG.md             # Version history and changes
-├── VERSIONING.md            # Versioning strategy
-└── build/                   # Build artifacts (generated)
-```
-
-## Version Management
-
-### Checking the Current Version
-
-```bash
-# Display version information
-python version.py
-
-# Or with version manager tool
-python version_manager.py --show
-```
-
-**Output:**
-
-```
-title: AN-DETECT-ZIP-AGM
-version: 1.0.0
-author: Development Team
-description: ZIP file detector and repacker with GUI monitoring
-status: Production
-license: MIT
-```
-
-### Bumping Versions
-
-Use the `version_manager.py` tool to increment versions following Semantic Versioning:
-
-```bash
-# For bug fixes (1.0.0 → 1.0.1)
-python version_manager.py --patch
-
-# For new features (1.0.0 → 1.1.0)
-python version_manager.py --minor
-
-# For breaking changes (1.0.0 → 2.0.0)
-python version_manager.py --major
-```
-
-### Creating a Release
-
-**Automated (Recommended):**
-
-```bash
-python release.py patch
-```
-
-This automatically:
-
-1. Updates version in `version.py`
-2. Builds new executable with `python build.py`
-3. Creates git commit with updated files
-4. Creates git tag for the release
-
-**Preview before release:**
-
-```bash
-python release.py patch --dry-run
-```
-
-### Development Status
-
-Change the development status of your release:
-
-```bash
-python version_manager.py --status Production
-# Options: Development, Alpha, Beta, RC, Production
-```
-
-### Version Information Files
-
-- **version.py** - Centralized version information (edit to change version manually)
-- **CHANGELOG.md** - Record of all releases and changes
-- **VERSIONING.md** - Complete versioning strategy documentation
-
-## Configuration
-
-The application stores settings in `settings.json` with configurable options for:
-
-- Extract subdirectory
-- Output subdirectory
-- Processed files subdirectory
-- Trash/deleted files subdirectory
-- Polling intervals
-- File settle time
-- Event logging limits
-
-## Development
-
-### Project Structure - Development
-
-- **Main Application:** `watch_zip_repack.py` - Core functionality with GUI
-- **Build System:** `build.py` - PyInstaller integration with version info
-- **Versioning:** `version.py` - Centralized version management
-
-### Version Management Tools
-
-The project includes three Python scripts for version management:
-
-1. **version.py** - Displays version information
-2. **version_manager.py** - CLI tool for bumping versions and changing status
-3. **release.py** - Automates complete release workflow
-
-See [Version Management](#version-management) section above for usage examples.
-
-### Making Releases
-
-**Quick release (recommended):**
-
-```bash
-python release.py minor
-```
-
-**Step-by-step:**
-
-1. Update version: `python version_manager.py --patch`
-2. Update `CHANGELOG.md` with changes
-3. Build executable: `python build.py`
-4. Commit and tag:
-   ```bash
-   git add version.py CHANGELOG.md
-   git commit -m "Release v1.0.1"
-   git tag -a v1.0.1 -m "Release version 1.0.1"
-   ```
-
-For detailed information, see [VERSIONING.md](VERSIONING.md).
-
-## License
-
-MIT
-
-## Author
-
-Development Team
+**An-Zip-Watcher** es una herramienta de monitoreo y automatización para el procesamiento de archivos ZIP. Detecta automáticamente nuevos archivos en una carpeta vigilada, los descomprime, procesa su contenido y genera un nuevo paquete ZIP estandarizado en una carpeta de salida, manteniendo un registro detallado de todas las operaciones.
 
 ---
 
-## Additional Resources
+## 🚀 Características Principales
 
-- **Complete Version Tools Guide:** [docs/VERSION_TOOLS_GUIDE.md](docs/VERSION_TOOLS_GUIDE.md)
-- **Versioning Strategy:** [docs/VERSIONING.md](docs/VERSIONING.md)
-- **Release History:** [CHANGELOG.md](CHANGELOG.md)
+### 👁️ Monitoreo Inteligente
+- **Detección Automática**: Vigila constantemente una carpeta asignada en busca de nuevos archivos `.zip`.
+- **Estabilidad de Archivos**: Espera inteligentemente a que los archivos terminen de copiarse antes de procesarlos.
+- **Validación**: Verifica la integridad de los ZIPs antes de intentar abrirlos.
+
+### 🔄 Procesamiento Automatizado
+1. **Descompresión**: Extrae el contenido en una subcarpeta temporal.
+2. **Re-empaquetado**: Identifica la carpeta raíz del contenido y crea un nuevo ZIP limpio.
+3. **Organización**: Mueve el archivo original a `processed` y el nuevo ZIP a `output`.
+
+### 🖥️ Interfaz Moderna (Tabbed UI)
+- **🏠 Home**: 
+  - **Dashboard**: Estado del servicio y contadores de actividad en tiempo real.
+  - **Eventos Procesados**: Tabla detallada con historial de operaciones, estado (✅/⚠️/❌) y acceso rápido a carpetas.
+  - **Logs**: Consola de registro con filtrado avanzado y búsqueda.
+- **⚙️ Configuración**: Ajuste de rutas, tiempos de espera y reintentos.
+- **🧹 Mantenimiento**: Herramientas para limpiar carpetas de trabajo y gestionar la papelera interna.
+
+### 💾 Persistencia de Sesiones
+- **Auto-guardado**: La sesión se guarda automáticamente al cerrar la aplicación.
+- **Historial Completo**: Exporta e importa sesiones para auditoría o backups.
+- **Verificación de Integridad**: Herramienta para auditar si los archivos procesados siguen existiendo o han sido eliminados.
+
+---
+
+## 🛠️ Instalación y Uso
+
+### Requisitos
+- Windows (Probado en Windows 10/11)
+- Python 3.10+ (Si se ejecuta desde el código fuente)
+
+### Ejecución
+1. Ejecuta la aplicación:
+   ```bash
+   py watch_zip_repack.py
+   ```
+2. **Primera Vez**: La app te pedirá seleccionar una "Carpeta de Vigilancia".
+3. **Configurar**: Ajusta los parámetros si es necesario y guarda.
+4. **Iniciar**: Pulsa el botón `▶ Iniciar` para comenzar el monitoreo.
+
+---
+
+## 📂 Estructura de Carpetas
+
+La aplicación creará automáticamente las siguientes subcarpetas dentro de tu directorio de vigilancia:
+
+- `processed/`: Archivos originales movidos tras el procesamiento.
+- `extracted/`: Carpeta temporal de descompresión (se puede limpiar desde Mantenimiento).
+- `output/`: Destino de los nuevos archivos ZIP generados.
+- `Trash/`: Papelera interna de seguridad para archivos eliminados desde la app.
+
+---
+
+## 🧩 Desarrollo
+
+### Stack Tecnológico
+- **Lenguaje**: Python 3
+- **GUI**: Tkinter + ttk (Tema moderno 'Azure'/'Sun-Valley' style inspiration)
+- **Arquitectura**: Threading para monitoreo no bloqueante.
+
+### Comandos Útiles
+- **Construir ejecutable**: `py build.py`
+- **Gestionar versión**: `py version_manager.py`
+
+---
+
+**Autor**: AnAppWiLos
+**Licencia**: MIT
+**Versión**: 2.0.0

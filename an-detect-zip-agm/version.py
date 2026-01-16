@@ -27,7 +27,7 @@ For version management:
 See docs/VERSION_TOOLS_GUIDE.md for complete documentation.
 """
 
-__title__ = "AN-DETECT-ZIP-AGM"
+__title__ = "An-Zip-Watcher"
 __description__ = "ZIP file detector and repacker with GUI monitoring"
 __version__ = "2.0.0"
 __author__ = "AnAppWiLos"

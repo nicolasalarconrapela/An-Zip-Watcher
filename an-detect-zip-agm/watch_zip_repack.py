@@ -352,7 +352,7 @@ class WatcherThread(threading.Thread):
 class ZipWatcherApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ZIP Watcher")
+        self.title("An-Zip-Watcher")
         self.minsize(1120, 720)
 
         self.settings = load_settings()
@@ -747,7 +747,7 @@ class ZipWatcherApp(tk.Tk):
     def _build_sidebar(self):
         """Sidebar simplificado - solo info de vistazo."""
         pad = {"padx": 14, "pady": 10}
-        ttk.Label(self.sidebar, text="ZIP Watcher", style="SidebarTitle.TLabel").pack(anchor="w", **pad)
+        ttk.Label(self.sidebar, text="An-Zip-Watcher", style="SidebarTitle.TLabel").pack(anchor="w", **pad)
         ttk.Separator(self.sidebar).pack(fill="x", padx=14, pady=(0, 10))
 
         self.side_state_emoji = tk.StringVar(value="🔴")
