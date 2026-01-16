@@ -29,13 +29,13 @@ See docs/VERSION_TOOLS_GUIDE.md for complete documentation.
 
 __title__ = "AN-DETECT-ZIP-AGM"
 __description__ = "ZIP file detector and repacker with GUI monitoring"
-__version__ = "1.0.0"
-__author__ = "Development Team"
+__version__ = "2.0.0"
+__author__ = "AnAppWiLos"
 __license__ = "MIT"
 __status__ = "Production"  # Development, Alpha, Beta, RC, Production
 
 # Version parts
-VERSION_MAJOR = 1
+VERSION_MAJOR = 2
 VERSION_MINOR = 0
 VERSION_PATCH = 0
 VERSION_BUILD = None  # Set during build process
