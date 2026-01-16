@@ -419,347 +419,250 @@ class ZipWatcherApp(tk.Tk):
         self.sidebar.pack(side="left", fill="both", padx=0)
         self.sidebar.pack_propagate(False)
 
-        # Main
+        # Main area
         main = ttk.Frame(root, style="App.TFrame")
         main.pack(side="left", fill="both", expand=True)
 
-        # Toolbar
-        toolbar = ttk.Frame(main, style="Toolbar.TFrame")
-        toolbar.pack(side="top", fill="x")
+        # Header común (Título + Status Pill)
+        header = ttk.Frame(main, style="Toolbar.TFrame")
+        header.pack(side="top", fill="x") # Sin padding, estilo flat
 
-        self.btn_start = ttk.Button(toolbar, text="Iniciar", style="Primary.TButton", command=self.start_watcher)
-        self.btn_start.pack(side="left", padx=(14, 8), pady=10)
-
-        self.btn_stop = ttk.Button(toolbar, text="Parar", style="Danger.TButton", command=self.stop_watcher, state="disabled")
-        self.btn_stop.pack(side="left", padx=8, pady=10)
-
-        self.btn_save = ttk.Button(toolbar, text="Guardar", style="Ghost.TButton", command=self.save_from_form)
-        self.btn_save.pack(side="left", padx=8, pady=10)
-
-        self.btn_open = ttk.Button(toolbar, text="Abrir carpeta", style="Ghost.TButton", command=self.open_watch_folder)
-        self.btn_open.pack(side="left", padx=8, pady=10)
-
-        # Status pill (mejorado con icono y color)
+        # Título app
+        title_frame = ttk.Frame(header, style="Toolbar.TFrame")
+        title_frame.pack(side="left", padx=18, pady=12)
+        tk.Label(title_frame, text="ZIP Watcher", font=("Segoe UI", 16, "bold"), bg="#ffffff").pack(side="left")
+        
+        # Status pill (mejorado)
         self.status_text = tk.StringVar(value="Listo")
         self.status_pill_text = tk.StringVar(value="⏸️ Detenido")
-        status_frame = ttk.Frame(toolbar, style="Toolbar.TFrame")
-        status_frame.pack(side="right", padx=14, pady=10)
         
-        # Pill con fondo de color
+        status_frame = ttk.Frame(header, style="Toolbar.TFrame")
+        status_frame.pack(side="right", padx=18, pady=12)
+        
         self.status_pill_label = tk.Label(
             status_frame, 
             textvariable=self.status_pill_text, 
             bg="#e5e7eb", 
             fg="#374151",
             font=("Segoe UI", 9, "bold"),
-            padx=10, 
-            pady=4,
+            padx=12, 
+            pady=6,
             relief="flat"
         )
         self.status_pill_label.pack(side="right")
-        ttk.Label(status_frame, textvariable=self.status_text, style="Status.TLabel").pack(side="right", padx=(0, 10))
 
-        # Content
-        content = ttk.Frame(main, style="App.TFrame")
-        content.pack(side="top", fill="both", expand=True, padx=14, pady=(0, 14))
+        # Toolbar de acciones globales (debajo del header)
+        toolbar = ttk.Frame(main, style="App.TFrame") # Color de fondo app para separar
+        toolbar.pack(side="top", fill="x", padx=18, pady=(4, 10))
 
-        header = ttk.Frame(content, style="App.TFrame")
-        header.pack(fill="x", pady=(6, 10))
-        tk.Label(header, text="ZIP Watcher", font=("Segoe UI", 18, "bold"), bg="#f6f7fb").pack(side="left")
-        tk.Label(
-            header,
-            text="Monitoriza ZIPs → descomprime → comprime la primera carpeta.",
-            font=("Segoe UI", 10),
-            bg="#f6f7fb",
-            fg="#6b7280",
-        ).pack(side="left", padx=(12, 0))
+        self.btn_start = ttk.Button(toolbar, text="▶ Iniciar", style="Primary.TButton", command=self.start_watcher)
+        self.btn_start.pack(side="left", padx=(0, 8))
 
-        # Two columns
-        body = ttk.Frame(content, style="App.TFrame")
-        body.pack(fill="both", expand=True)
-
-        left_col = ttk.Frame(body, style="App.TFrame")
-        left_col.pack(side="left", fill="both", expand=True)
-
-        right_col = ttk.Frame(body, style="App.TFrame")
-        right_col.pack(side="left", fill="both", expand=True, padx=(14, 0))
-
-        # -------- Banner de bienvenida (solo si watch_dir vacío)
-        self.banner_frame = None
-        if not self.settings.get("watch_dir", "").strip():
-            self._build_welcome_banner(left_col)
-
-        # -------- Dashboard card (left top) - SIMPLIFICADO con mejor spacing
-        self.card_dash = ttk.Frame(left_col, style="Card.TFrame")
-        self.card_dash.pack(fill="x", pady=(0 if self.banner_frame else 0, 0))
-
-        dash = ttk.Frame(self.card_dash, style="Card.TFrame")
-        dash.pack(fill="x", padx=18, pady=18)
-
-        ttk.Label(dash, text="Estado del Monitor", style="H1.TLabel").pack(anchor="w")
-        ttk.Label(dash, text="Vista general de la vigilancia.", style="Muted.TLabel").pack(anchor="w", pady=(4, 16))
-
-        # Estado visual con emoji
-        state_frame = ttk.Frame(dash, style="Card.TFrame")
-        state_frame.pack(fill="x", pady=(0, 14))
+        self.btn_stop = ttk.Button(toolbar, text="⏹ Parar", style="Danger.TButton", command=self.stop_watcher, state="disabled")
+        self.btn_stop.pack(side="left", padx=0)
         
+        self.btn_open = ttk.Button(toolbar, text="📂 Abrir carpeta", style="Ghost.TButton", command=self.open_watch_folder)
+        self.btn_open.pack(side="left", padx=8)
+
+        # NOTEBOOK (Pestañas)
+        # Estilo custom para tabs más grandes
+        style = ttk.Style()
+        style.configure("TNotebook", background="#f6f7fb", borderwidth=0)
+        style.configure("TNotebook.Tab", map={"background": [("selected", "#ffffff"), ("active", "#e5e7eb")]},
+                        background="#f3f4f6", padding=[20, 10], font=("Segoe UI", 10))
+        
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+
+        # --- TAB 1: HOME (Logs + Monitor) ---
+        self.tab_home = ttk.Frame(self.notebook, style="App.TFrame")
+        self.notebook.add(self.tab_home, text="🏠 Home")
+        
+        # --- TAB 2: CONFIGURACIÓN ---
+        self.tab_config = ttk.Frame(self.notebook, style="App.TFrame")
+        self.notebook.add(self.tab_config, text="⚙️ Configuración")
+
+        # --- TAB 3: MANTENIMIENTO ---
+        self.tab_maintenance = ttk.Frame(self.notebook, style="App.TFrame")
+        self.notebook.add(self.tab_maintenance, text="🧹 Mantenimiento")
+
+        # ==================== CONTENIDO HOME ====================
+        
+        # Dashboard compacta arriba
+        self.card_dash = ttk.Frame(self.tab_home, style="Card.TFrame")
+        self.card_dash.pack(fill="x", pady=18, padx=18)
+        
+        dash_inner = ttk.Frame(self.card_dash, style="Card.TFrame")
+        dash_inner.pack(fill="x", padx=18, pady=14)
+        
+        # Monitor info row
+        mon_row = ttk.Frame(dash_inner, style="Card.TFrame")
+        mon_row.pack(fill="x")
+        
+        # Estado (Emoji grande)
         self.dash_state_emoji = tk.StringVar(value="🔴")
         self.dash_state_text = tk.StringVar(value="Detenido")
         
-        tk.Label(state_frame, textvariable=self.dash_state_emoji, background="#ffffff", font=("Segoe UI", 18)).pack(side="left")
-        tk.Label(state_frame, textvariable=self.dash_state_text, background="#ffffff", foreground="#111827", font=("Segoe UI", 14, "bold")).pack(side="left", padx=(10, 0))
-
-        # Carpeta vigilada
-        ttk.Label(dash, text="📁 Carpeta vigilada", background="#ffffff", foreground="#6b7280", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
+        tk.Label(mon_row, textvariable=self.dash_state_emoji, background="#ffffff", font=("Segoe UI", 24)).pack(side="left")
+        
+        info_col = ttk.Frame(mon_row, style="Card.TFrame")
+        info_col.pack(side="left", padx=(14, 0))
+        
+        ttk.Label(info_col, textvariable=self.dash_state_text, background="#ffffff", foreground="#111827", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        
         self.dash_watch = tk.StringVar(value="(sin configurar)")
-        ttk.Label(dash, textvariable=self.dash_watch, background="#ffffff", foreground="#374151", font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 14))
+        ttk.Label(info_col, textvariable=self.dash_watch, background="#ffffff", foreground="#6b7280", font=("Segoe UI", 10)).pack(anchor="w")
 
-        # Contadores reorganizados
-        ttk.Label(dash, text="📊 Actividad", background="#ffffff", foreground="#6b7280", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
-        self.counts_var = tk.StringVar(value="✅ Procesados: 0  |  ⚠️ Advertencias: 0  |  ❌ Errores: 0")
-        ttk.Label(dash, textvariable=self.counts_var, background="#ffffff", foreground="#111827", font=("Segoe UI", 10)).pack(anchor="w")
+        # Contadores a la derecha
+        stats_col = ttk.Frame(mon_row, style="Card.TFrame")
+        stats_col.pack(side="right")
+        
+        self.counts_var = tk.StringVar(value="✅ 0   ⚠️ 0   ❌ 0")
+        ttk.Label(stats_col, text="Actividad de sesión", background="#ffffff", foreground="#9ca3af", font=("Segoe UI", 9)).pack(anchor="e")
+        ttk.Label(stats_col, textvariable=self.counts_var, background="#ffffff", font=("Segoe UI", 12, "bold")).pack(anchor="e")
 
-        # -------- Config card (left bottom) con mejor spacing
-        self.card_config = ttk.Frame(left_col, style="Card.TFrame")
-        self.card_config.pack(fill="both", expand=True, pady=(16, 0))
+        # Logs container (ocupa el resto)
+        logs_frame = ttk.Frame(self.tab_home, style="Card.TFrame")
+        logs_frame.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        
+        # Tabs de logs
+        log_tabs_bar = ttk.Frame(logs_frame, style="Card.TFrame")
+        log_tabs_bar.pack(fill="x", padx=14, pady=14)
+        
+        self.current_log_tab = tk.StringVar(value="todos")
+        # Variables de filtro
+        self.filter_info = tk.BooleanVar(value=True)
+        self.filter_ok = tk.BooleanVar(value=True)
+        self.filter_warn = tk.BooleanVar(value=True)
+        self.filter_error = tk.BooleanVar(value=True)
 
+        self.tab_todos = tk.Button(log_tabs_bar, text="Todos", command=lambda: self.switch_log_tab("todos"), 
+                                 bg="#3b82f6", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", padx=16, pady=6, cursor="hand2")
+        self.tab_todos.pack(side="left", padx=(0, 4))
+        
+        self.tab_problemas = tk.Button(log_tabs_bar, text="Solo problemas", command=lambda: self.switch_log_tab("problemas"), 
+                                     bg="#e5e7eb", fg="#374151", font=("Segoe UI", 9), relief="flat", padx=16, pady=6, cursor="hand2")
+        self.tab_problemas.pack(side="left", padx=(0, 4))
+        
+        self.tab_buscar = tk.Button(log_tabs_bar, text="Buscar", command=lambda: self.switch_log_tab("buscar"), 
+                                  bg="#e5e7eb", fg="#374151", font=("Segoe UI", 9), relief="flat", padx=16, pady=6, cursor="hand2")
+        self.tab_buscar.pack(side="left")
+
+        # Botones log acciones (derecha)
+        self.btn_clear_logs = ttk.Button(log_tabs_bar, text="🧽 Limpiar", command=self.clear_logs_only)
+        self.btn_clear_logs.pack(side="right", padx=(6, 0))
+        ttk.Button(log_tabs_bar, text="💾 Exportar", command=self.export_logs).pack(side="right")
+
+        # Search frame (oculto)
+        self.search_frame = ttk.Frame(logs_frame, style="Card.TFrame")
+        self.search_var = tk.StringVar(value="")
+        ttk.Entry(self.search_frame, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(14, 8))
+        ttk.Button(self.search_frame, text="🔎 Buscar", command=self.search_logs).pack(side="left", padx=(0, 4))
+        ttk.Button(self.search_frame, text="X", command=self.clear_search, width=3).pack(side="left", padx=(0, 14))
+
+        # Text area logs
+        logs_container = ttk.Frame(logs_frame, style="Card.TFrame")
+        logs_container.pack(fill="both", expand=True, padx=1, pady=1) # Border overlap
+        
+        logs_border = tk.Frame(logs_container, background="#e2e8f0", bd=1)
+        logs_border.pack(fill="both", expand=True)
+
+        scrollbar_y = ttk.Scrollbar(logs_border)
+        scrollbar_y.pack(side="right", fill="y")
+        scrollbar_x = ttk.Scrollbar(logs_border, orient="horizontal")
+        scrollbar_x.pack(side="bottom", fill="x")
+
+        self.txt_logs = tk.Text(logs_border, height=10, wrap="none", bg="#1e293b", fg="#f8fafc", 
+                              insertbackground="#f8fafc", relief="flat", padx=12, pady=10,
+                              yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set, font=("Consolas", 10))
+        self.txt_logs.pack(side="left", fill="both", expand=True)
+        self.txt_logs.configure(state="disabled")
+        scrollbar_y.config(command=self.txt_logs.yview)
+        scrollbar_x.config(command=self.txt_logs.xview)
+        
+        # Configurar tags
+        self._configure_log_tags()
+
+        # ================= CONIGURACIÓN TAB =================
+        self.card_config = ttk.Frame(self.tab_config, style="Card.TFrame")
+        self.card_config.pack(fill="x", padx=18, pady=18)
+        
         cfg = ttk.Frame(self.card_config, style="Card.TFrame")
-        cfg.pack(fill="both", expand=True, padx=18, pady=18)
-
-        ttk.Label(cfg, text="Configuración", style="H1.TLabel").pack(anchor="w")
-        ttk.Label(cfg, text="Carpeta de vigilancia y opciones.", style="Muted.TLabel").pack(anchor="w", pady=(4, 12))
-
+        cfg.pack(fill="x", padx=24, pady=24)
+        
+        ttk.Label(cfg, text="Configuración del Monitor", style="H1.TLabel").pack(anchor="w", pady=(0, 16))
+        
         self.var_watch_dir = tk.StringVar()
         self.var_poll = tk.StringVar()
         self.var_tries = tk.StringVar()
         self.var_scan = tk.StringVar()
 
-        ttk.Label(cfg, text="Carpeta de vigilancia", background="#ffffff", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        row = ttk.Frame(cfg, style="Card.TFrame")
-        row.pack(fill="x", pady=(4, 10))
-        ttk.Entry(row, textvariable=self.var_watch_dir).pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="Explorar...", command=self.browse_folder).pack(side="left", padx=(8, 0))
-
-        # Configuración avanzada (colapsable)
-        self.advanced_expanded = tk.BooleanVar(value=self.settings.get("advanced_config_expanded", False))
+        tk.Label(cfg, text="Carpeta de vigilancia", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w")
+        tk.Label(cfg, text="Los archivos ZIP que aparezcan aquí serán procesados.", background="#ffffff", fg="#6b7280").pack(anchor="w", pady=(0, 6))
         
-        adv_toggle = ttk.Frame(cfg, style="Card.TFrame")
-        adv_toggle.pack(fill="x", pady=(10, 6))
+        row_dir = ttk.Frame(cfg, style="Card.TFrame")
+        row_dir.pack(fill="x", pady=(0, 16))
+        ttk.Entry(row_dir, textvariable=self.var_watch_dir, font=("Segoe UI", 10)).pack(side="left", fill="x", expand=True, ipady=4)
+        ttk.Button(row_dir, text="Explorar...", command=self.browse_folder).pack(side="left", padx=(8, 0))
+
+        # Opciones avanzadas siempre visibles en pestaña dedicada
+        tk.Label(cfg, text="Opciones de detección", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w", pady=(6, 0))
         
-        self.adv_toggle_btn = ttk.Button(
-            adv_toggle, 
-            text="▼ Configuración avanzada (opcional)" if self.advanced_expanded.get() else "▶ Configuración avanzada (opcional)",
-            command=self.toggle_advanced_config,
-            style="Ghost.TButton"
-        )
-        self.adv_toggle_btn.pack(anchor="w")
-
-        # Frame para configuración avanzada
-        self.advanced_frame = ttk.Frame(cfg, style="Card.TFrame")
-        if self.advanced_expanded.get():
-            self.advanced_frame.pack(fill="x", pady=(6, 12))
-
-        def field(parent, label, var, tooltip=""):
+        row_opts = ttk.Frame(cfg, style="Card.TFrame")
+        row_opts.pack(fill="x", pady=(8, 0))
+        
+        def config_field(parent, label, var, tooltip):
             f = ttk.Frame(parent, style="Card.TFrame")
-            label_widget = ttk.Label(f, text=label, background="#ffffff")
-            label_widget.pack(anchor="w")
-            # Tooltip simple (se puede mejorar con biblioteca externa)
-            if tooltip:
-                self._create_tooltip(label_widget, tooltip)
-            ttk.Entry(f, textvariable=var, width=20).pack(anchor="w", pady=(4, 0))
+            lbl = tk.Label(f, text=label, background="#ffffff", fg="#374151")
+            lbl.pack(anchor="w")
+            self._create_tooltip(lbl, tooltip)
+            ttk.Entry(f, textvariable=var, width=15).pack(anchor="w", pady=(2, 0))
             return f
 
-        field(self.advanced_frame, "Tiempo de espera (seg)", self.var_poll, 
-              "Segundos que espera para verificar que el archivo terminó de copiarse").grid(row=0, column=0, sticky="w", padx=(0, 18), pady=4)
-        field(self.advanced_frame, "Intentos máximos", self.var_tries,
-              "Cuántas veces verificar antes de considerar el archivo estable").grid(row=0, column=1, sticky="w", padx=(0, 18), pady=4)
-        field(self.advanced_frame, "Frecuencia de escaneo (seg)", self.var_scan,
-              "Cada cuántos segundos revisar la carpeta (mínimo: 0.2)").grid(row=0, column=2, sticky="w", pady=4)
-
-        # -------- Activity / Maintenance card (right)
-        self.card_activity = ttk.Frame(right_col, style="Card.TFrame")
-        self.card_activity.pack(fill="both", expand=True)
-
-        act = ttk.Frame(self.card_activity, style="Card.TFrame")
-        act.pack(fill="both", expand=True, padx=14, pady=14)
-
-        top = ttk.Frame(act, style="Card.TFrame")
-        top.pack(fill="x")
-        ttk.Label(top, text="Actividad y mantenimiento", style="H1.TLabel").pack(side="left")
-
-        # Botones de mantenimiento con mejor spacing
-        ttk.Label(act, text="🧹 Mantenimiento", background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(16, 6))
-        ttk.Label(act, text="Limpia carpetas individuales:", background="#ffffff", foreground="#6b7280", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
+        config_field(row_opts, "Tiempo espera (s)", self.var_poll, "Tiempo para verificar copia completa").pack(side="left", padx=(0, 20))
+        config_field(row_opts, "Intentos máx.", self.var_tries, "Intentos antes de error").pack(side="left", padx=(0, 20))
+        config_field(row_opts, "Escaneo (s)", self.var_scan, "Intervalo de chequeo").pack(side="left")
         
-        maintenance_row1 = ttk.Frame(act, style="Card.TFrame")
-        maintenance_row1.pack(fill="x", pady=(0, 10))
+        # Botón guardar grande
+        ttk.Separator(cfg).pack(fill="x", pady=20)
+        btn_save_config = ttk.Button(cfg, text="💾 Guardar configuración", style="Primary.TButton", command=self.save_from_form)
+        btn_save_config.pack(anchor="e")
 
-        self.btn_clean_processed = ttk.Button(maintenance_row1, text="Processed", command=lambda: self.clean_dir_to_trash("processed"))
-        self.btn_clean_processed.pack(side="left", padx=(0, 6))
-
-        self.btn_clean_extracted = ttk.Button(maintenance_row1, text="Extracted", command=lambda: self.clean_dir_to_trash("extracted"))
-        self.btn_clean_extracted.pack(side="left", padx=(0, 6))
-
-        self.btn_clean_output = ttk.Button(maintenance_row1, text="Output", command=lambda: self.clean_dir_to_trash("output"))
-        self.btn_clean_output.pack(side="left", padx=(0, 6))
-
-        ttk.Separator(act, orient="horizontal").pack(fill="x", pady=10)
+        # ================= MANTENIMIENTO TAB =================
+        self.card_activity = ttk.Frame(self.tab_maintenance, style="Card.TFrame")
+        self.card_activity.pack(fill="both", expand=True, padx=18, pady=18)
         
-        ttk.Label(act, text="Acciones globales:", background="#ffffff", foreground="#6b7280", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
-        self.btn_clean_all = ttk.Button(act, text="🧹 Limpiar todo → Papelera", command=self.clean_all_to_trash)
-        self.btn_clean_all.pack(anchor="w", pady=(0, 10))
+        maint = ttk.Frame(self.card_activity, style="Card.TFrame")
+        maint.pack(fill="both", expand=True, padx=24, pady=24)
         
-        ttk.Separator(act, orient="horizontal").pack(fill="x", pady=10)
+        ttk.Label(maint, text="Mantenimiento de Carpetas", style="H1.TLabel").pack(anchor="w", pady=(0, 16))
         
-        ttk.Label(act, text="⚠️ Zona de peligro:", background="#ffffff", foreground="#dc2626", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 6))
-        self.btn_empty_trash = ttk.Button(act, text="🗑️ Vaciar papelera definitivamente", command=self.empty_trash, style="Danger.TButton")
-        self.btn_empty_trash.pack(anchor="w", pady=(0, 16))
-
-        # SISTEMA DE PESTAÑAS para logs
-        ttk.Label(act, text="📋 Logs", background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Label(maint, text="Limpieza manual", background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
         
-        # Tabs
-        tabs_frame = ttk.Frame(act, style="Card.TFrame")
-        tabs_frame.pack(fill="x", pady=(0, 10))
+        row_m1 = ttk.Frame(maint, style="Card.TFrame")
+        row_m1.pack(fill="x", pady=(0, 16))
+        self.btn_clean_processed = ttk.Button(row_m1, text="Limpiar 'Processed'", command=lambda: self.clean_dir_to_trash("processed"))
+        self.btn_clean_processed.pack(side="left", padx=(0, 8))
+        self.btn_clean_extracted = ttk.Button(row_m1, text="Limpiar 'Extracted'", command=lambda: self.clean_dir_to_trash("extracted"))
+        self.btn_clean_extracted.pack(side="left", padx=(0, 8))
+        self.btn_clean_output = ttk.Button(row_m1, text="Limpiar 'Output'", command=lambda: self.clean_dir_to_trash("output"))
+        self.btn_clean_output.pack(side="left")
         
-        self.current_log_tab = tk.StringVar(value="todos")
+        ttk.Separator(maint).pack(fill="x", pady=16)
         
-        # Variables de filtro (se mantienen para compatibilidad)
-        self.filter_info = tk.BooleanVar(value=True)
-        self.filter_ok = tk.BooleanVar(value=True)
-        self.filter_warn = tk.BooleanVar(value=True)
-        self.filter_error = tk.BooleanVar(value=True)
+        ttk.Label(maint, text="Acciones destructivas", background="#ffffff", font=("Segoe UI", 11, "bold"), foreground="#dc2626").pack(anchor="w", pady=(0, 8))
         
-        # Tab buttons
-        self.tab_todos = tk.Button(
-            tabs_frame, 
-            text="Todos", 
-            command=lambda: self.switch_log_tab("todos"),
-            bg="#3b82f6", 
-            fg="white",
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            padx=16,
-            pady=6,
-            cursor="hand2"
-        )
-        self.tab_todos.pack(side="left", padx=(0, 4))
-        
-        self.tab_problemas = tk.Button(
-            tabs_frame, 
-            text="Solo problemas", 
-            command=lambda: self.switch_log_tab("problemas"),
-            bg="#e5e7eb", 
-            fg="#374151",
-            font=("Segoe UI", 9),
-            relief="flat",
-            padx=16,
-            pady=6,
-            cursor="hand2"
-        )
-        self.tab_problemas.pack(side="left", padx=(0, 4))
-        
-        self.tab_buscar = tk.Button(
-            tabs_frame, 
-            text="Buscar", 
-            command=lambda: self.switch_log_tab("buscar"),
-            bg="#e5e7eb", 
-            fg="#374151",
-            font=("Segoe UI", 9),
-            relief="flat",
-            padx=16,
-            pady=6,
-            cursor="hand2"
-        )
-        self.tab_buscar.pack(side="left")
-        
-        # Controles según tab activo
-        self.tab_content_frame = ttk.Frame(act, style="Card.TFrame")
-        self.tab_content_frame.pack(fill="x", pady=(0, 10))
-        
-        # Frame para búsqueda (oculto por defecto)
-        self.search_frame = ttk.Frame(self.tab_content_frame, style="Card.TFrame")
-        self.search_var = tk.StringVar(value="")
-        ttk.Entry(self.search_frame, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(self.search_frame, text="🔎 Buscar", command=self.search_logs).pack(side="left", padx=(0, 4))
-        ttk.Button(self.search_frame, text="Limpiar", command=self.clear_search).pack(side="left")
-        
-        # Botones de acción (siempre visibles)
-        actions_frame = ttk.Frame(act, style="Card.TFrame")
-        actions_frame.pack(fill="x", pady=(0, 10))
-        
-        self.btn_clear_logs = ttk.Button(actions_frame, text="🧽 Limpiar", command=self.clear_logs_only)
-        self.btn_clear_logs.pack(side="left", padx=(0, 6))
+        self.btn_clean_all = ttk.Button(maint, text="🧹 Mover TODO a papelera", command=self.clean_all_to_trash)
+        self.btn_clean_all.pack(anchor="w", pady=(0, 8))
+        self.btn_empty_trash = ttk.Button(maint, text="🗑️ Vaciar papelera definitivamente", style="Danger.TButton", command=self.empty_trash)
+        self.btn_empty_trash.pack(anchor="w")
 
-        self.btn_copy_logs = ttk.Button(actions_frame, text="📋 Copiar", command=self.copy_logs)
-        self.btn_copy_logs.pack(side="left", padx=(0, 6))
+        # Banner logic (si watch_dir vacio, ir a tab config)
+        if not self.settings.get("watch_dir", "").strip():
+            self.notebook.select(1) # Tab Configuración
+            messagebox.showinfo("Bienvenido", "Por favor configura la carpeta de vigilancia para comenzar.")
 
-        self.btn_export_logs = ttk.Button(actions_frame, text="💾 Exportar", command=self.export_logs)
-        self.btn_export_logs.pack(side="left")
-
-        # Split: logs + recent events
-        split = ttk.PanedWindow(act, orient="vertical")
-        split.pack(fill="both", expand=True)
-
-        logs_frame = ttk.Frame(split, style="Card.TFrame")
-
-        scrollbar_y = ttk.Scrollbar(logs_frame)
-        scrollbar_y.pack(side="right", fill="y")
-        scrollbar_x = ttk.Scrollbar(logs_frame, orient="horizontal")
-        scrollbar_x.pack(side="bottom", fill="x")
-
-        self.txt_logs = tk.Text(
-            logs_frame,
-            height=16,
-            wrap="none",
-            bg="#0b1220",
-            fg="#e5e7eb",
-            insertbackground="#e5e7eb",
-            relief="flat",
-            padx=10,
-            pady=8,
-            yscrollcommand=scrollbar_y.set,
-            xscrollcommand=scrollbar_x.set,
-            font=("Courier New", 10)
-        )
-        self.txt_logs.pack(side="left", fill="both", expand=True)
-        self.txt_logs.configure(state="disabled")
-
-        scrollbar_y.config(command=self.txt_logs.yview)
-        scrollbar_x.config(command=self.txt_logs.xview)
-
-        # Tags
-        self.txt_logs.tag_config("INFO", foreground="#60a5fa", background="#0f172a")
-        self.txt_logs.tag_config("OK", foreground="#4ade80", background="#0b4620")
-        self.txt_logs.tag_config("WARN", foreground="#facc15", background="#4a3c0a")
-        self.txt_logs.tag_config("ERROR", foreground="#f87171", background="#7f1d1d")
-        self.txt_logs.tag_config("START", foreground="#4ade80", background="#0b4620", font=("Courier New", 10, "bold"))
-        self.txt_logs.tag_config("STOP", foreground="#f87171", background="#7f1d1d", font=("Courier New", 10, "bold"))
-        self.txt_logs.tag_config("ZIP", foreground="#a78bfa", background="#1e1b4b")
-        self.txt_logs.tag_config("FOLDER", foreground="#06b6d4", background="#082f49")
-        self.txt_logs.tag_config("CLEAN", foreground="#6ee7b7", background="#0d3b2b")
-        self.txt_logs.tag_config("TRASH", foreground="#6ee7b7", background="#0d3b2b")
-        self.txt_logs.tag_config("SEARCH", foreground="#fbbf24", background="#451407", font=("Courier New", 10, "bold"))
-        self.txt_logs.tag_config("SEPARATOR", foreground="#374151", background="#0b1220")
-
-        # Recent events table
-        table_frame = ttk.Frame(split, style="Card.TFrame")
-        ttk.Label(table_frame, text="Últimos eventos", background="#ffffff", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=8, pady=(8, 0))
-
-        cols = ("time", "level", "msg")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=7)
-        self.tree.heading("time", text="Hora")
-        self.tree.heading("level", text="Nivel")
-        self.tree.heading("msg", text="Mensaje")
-        self.tree.column("time", width=80, anchor="w")
-        self.tree.column("level", width=70, anchor="w")
-        self.tree.column("msg", anchor="w")
-        self.tree.pack(fill="both", expand=True, padx=8, pady=8)
-
-        split.add(logs_frame, weight=2)
-        split.add(table_frame, weight=1)
-
-        # Sidebar
+        # Sidebar setup
         self._build_sidebar()
 
         # Statusbar
@@ -769,6 +672,22 @@ class ZipWatcherApp(tk.Tk):
         ttk.Label(self.statusbar, textvariable=self.sb_left, style="Status.TLabel").pack(side="left", padx=14, pady=6)
         self.sb_right = tk.StringVar(value="")
         ttk.Label(self.statusbar, textvariable=self.sb_right, style="Status.TLabel").pack(side="right", padx=14, pady=6)
+
+    def _configure_log_tags(self):
+        self.txt_logs.tag_config("INFO", foreground="#94a3b8", background="#1e293b")
+        self.txt_logs.tag_config("OK", foreground="#4ade80", background="#1e293b")
+        self.txt_logs.tag_config("WARN", foreground="#facc15", background="#422006")
+        self.txt_logs.tag_config("ERROR", foreground="#f87171", background="#450a0a")
+        self.txt_logs.tag_config("START", foreground="#4ade80", background="#1e293b", font=("Consolas", 10, "bold"))
+        self.txt_logs.tag_config("STOP", foreground="#f87171", background="#1e293b", font=("Consolas", 10, "bold"))
+        self.txt_logs.tag_config("ZIP", foreground="#a78bfa", background="#1e293b")
+        self.txt_logs.tag_config("FOLDER", foreground="#22d3ee", background="#1e293b")
+        self.txt_logs.tag_config("CLEAN", foreground="#34d399", background="#1e293b")
+        self.txt_logs.tag_config("TRASH", foreground="#94a3b8", background="#1e293b")
+        self.txt_logs.tag_config("SEARCH", foreground="#fbbf24", background="#78350f", font=("Consolas", 10, "bold"))
+        self.txt_logs.tag_config("SEPARATOR", foreground="#475569", background="#1e293b")
+        # Fin de configuración de tags
+
 
     def _build_sidebar(self):
         """Sidebar simplificado - solo info de vistazo."""
@@ -1383,8 +1302,7 @@ class ZipWatcherApp(tk.Tk):
 
         self._append_log_direct("SEARCH", "Logs limpiados (solo UI).")
 
-        for iid in self.tree.get_children():
-            self.tree.delete(iid)
+
 
     def copy_logs(self):
         """Copia los logs al portapapeles con formato."""
@@ -1498,8 +1416,6 @@ LOG DETALLADO:
             if self._level_visible(ev.level):
                 visible_events.append(ev)
 
-            self._push_recent_event(ev)
-
         self._update_counts_label()
         self._refresh_dashboard_paths()
         self.sb_right.set(time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -1590,15 +1506,7 @@ LOG DETALLADO:
             if self._level_visible(ev.level):
                 self._append_log_to_text(ev)
 
-    def _push_recent_event(self, ev: LogEvent):
-        ts = time.strftime("%H:%M:%S", time.localtime(ev.ts))
-        lvl = ev.level.upper()
-        msg = ev.msg
-        iid = self.tree.insert("", 0, values=(ts, f"{emoji(lvl)} {lvl}", msg))
-        children = self.tree.get_children()
-        if len(children) > self._max_recent:
-            for iid2 in children[self._max_recent:]:
-                self.tree.delete(iid2)
+
 
     # ---------- Close
     def on_close(self):
