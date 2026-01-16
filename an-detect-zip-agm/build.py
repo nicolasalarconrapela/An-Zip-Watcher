@@ -97,16 +97,20 @@ def get_platform_specific_args():
     args = [
         "--onefile",
         "--windowed",
-        "--name=ZipWatcher",
+        "--name=An-Zip-Watcher",
+        # Incluir el icono PNG como dato para que la app lo lea
+        f"--add-data=imgs{os.pathsep}imgs",
     ]
     
     if system == "Windows":
         args.extend([
-            "--icon=NONE",
+            # Icono del archivo .exe
+            "--icon=imgs/app.ico",
         ])
     elif system == "Darwin":  # macOS
         args.extend([
-            "--osx-bundle-identifier=com.zipwatcher.app",
+            "--osx-bundle-identifier=com.anzipwatcher.app",
+            "--icon=imgs/icons.png"
         ])
     elif system == "Linux":
         args.extend([
@@ -148,7 +152,7 @@ def show_build_info():
     system = platform.system()
     
     if system == "Windows":
-        exe_name = "ZipWatcher.exe"
+        exe_name = "An-Zip-Watcher.exe"
         exe_path = dist_path / exe_name
         if exe_path.exists():
             size = exe_path.stat().st_size / (1024 * 1024)
@@ -159,15 +163,15 @@ def show_build_info():
             print_error(f"{exe_name} not found in dist/")
     
     elif system == "Darwin":  # macOS
-        app_path = dist_path / "ZipWatcher.app"
+        app_path = dist_path / "An-Zip-Watcher.app"
         if app_path.exists():
             print_success(f"App bundle created: {app_path}")
             print_info(f"Run: open {app_path}")
         else:
-            print_error("ZipWatcher.app not found in dist/")
+            print_error("An-Zip-Watcher.app not found in dist/")
     
     elif system == "Linux":
-        exe_name = "ZipWatcher"
+        exe_name = "An-Zip-Watcher"
         exe_path = dist_path / exe_name
         if exe_path.exists():
             size = exe_path.stat().st_size / (1024 * 1024)

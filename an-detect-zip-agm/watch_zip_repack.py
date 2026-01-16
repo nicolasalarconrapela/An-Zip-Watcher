@@ -358,19 +358,29 @@ class ZipWatcherApp(tk.Tk):
         
         # Cargar icono
         try:
-            icon_path = app_dir() / "imgs" / "icons.png"
-            if icon_path.exists():
-                self._app_icon = tk.PhotoImage(file=str(icon_path))
-                self.iconphoto(True, self._app_icon)
-                # Crear versión pequeña para UI (asumiendo 1024x1024 original -> 32x32 = subsample 32)
+            # 1. Icono de la ventana (Nativo Windows .ico)
+            ico_path = app_dir() / "imgs" / "app.ico"
+            if ico_path.exists():
+                self.iconbitmap(str(ico_path))
+            
+            # 2. Imágenes para la UI (PNG)
+            png_path = app_dir() / "imgs" / "icons.ico"
+            if png_path.exists():
+                self._app_icon = tk.PhotoImage(file=str(png_path))
+                # Crear versión pequeña para Sidebar
                 self._app_icon_small = self._app_icon.subsample(32, 32)
+                # Crear versión mediana para Dashboard
+                self._app_icon_medium = self._app_icon.subsample(12, 12)
             else:
                 self._app_icon = None
                 self._app_icon_small = None
+                self._app_icon_medium = None
+                
         except Exception as e:
-            print(f"Error cargando icono: {e}")
+            print(f"Error cargando iconos: {e}")
             self._app_icon = None
             self._app_icon_small = None
+            self._app_icon_medium = None
 
         self.settings = load_settings()
 
@@ -526,6 +536,11 @@ class ZipWatcherApp(tk.Tk):
         mon_row = ttk.Frame(dash_inner, style="Card.TFrame")
         mon_row.pack(fill="x")
         
+        # Logo a la derecha del todo (Visual identity)
+        if self._app_icon_medium:
+             logo_label = ttk.Label(mon_row, image=self._app_icon_medium, background="#ffffff")
+             logo_label.pack(side="right", padx=(24, 0))
+
         # Estado (Emoji grande)
         self.dash_state_emoji = tk.StringVar(value="🔴")
         self.dash_state_text = tk.StringVar(value="Detenido")
