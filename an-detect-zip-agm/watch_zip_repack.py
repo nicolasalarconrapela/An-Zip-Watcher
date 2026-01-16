@@ -14,6 +14,7 @@ from collections import deque
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from version import __version__
 
 
 # =========================
@@ -352,8 +353,24 @@ class WatcherThread(threading.Thread):
 class ZipWatcherApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("An-Zip-Watcher")
+        self.title(f"An-Zip-Watcher v{__version__}")
         self.minsize(1120, 720)
+        
+        # Cargar icono
+        try:
+            icon_path = app_dir() / "imgs" / "icons.png"
+            if icon_path.exists():
+                self._app_icon = tk.PhotoImage(file=str(icon_path))
+                self.iconphoto(True, self._app_icon)
+                # Crear versión pequeña para UI (asumiendo 1024x1024 original -> 32x32 = subsample 32)
+                self._app_icon_small = self._app_icon.subsample(32, 32)
+            else:
+                self._app_icon = None
+                self._app_icon_small = None
+        except Exception as e:
+            print(f"Error cargando icono: {e}")
+            self._app_icon = None
+            self._app_icon_small = None
 
         self.settings = load_settings()
 
@@ -747,7 +764,22 @@ class ZipWatcherApp(tk.Tk):
     def _build_sidebar(self):
         """Sidebar simplificado - solo info de vistazo."""
         pad = {"padx": 14, "pady": 10}
-        ttk.Label(self.sidebar, text="An-Zip-Watcher", style="SidebarTitle.TLabel").pack(anchor="w", **pad)
+        
+        # Header con Icono + Texto + Versión
+        header_frame = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        header_frame.pack(fill="x", **pad)
+        
+        if self._app_icon_small:
+            lbl_icon = ttk.Label(header_frame, image=self._app_icon_small, background="#f3f4f6")
+            lbl_icon.pack(side="left", padx=(0, 8))
+        
+        # Contenedor para título y versión
+        title_col = ttk.Frame(header_frame, style="Sidebar.TFrame")
+        title_col.pack(side="left")
+        
+        ttk.Label(title_col, text="An-Zip-Watcher", style="SidebarTitle.TLabel").pack(anchor="w")
+        ttk.Label(title_col, text=f"v{__version__}", font=("Segoe UI", 9), foreground="#6b7280", background="#f3f4f6").pack(anchor="w")
+
         ttk.Separator(self.sidebar).pack(fill="x", padx=14, pady=(0, 10))
 
         self.side_state_emoji = tk.StringVar(value="🔴")
