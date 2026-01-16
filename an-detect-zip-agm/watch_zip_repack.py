@@ -366,8 +366,13 @@ class ZipWatcherApp(tk.Tk):
         self._count_warn = 0
         self._count_error = 0
 
-        # recent events (tabla)
-        self._max_recent = int(self.settings.get("max_recent_events", 50))
+        # Eventos procesados (tabla de actividad)
+        self._event_counter = 0
+        self._processed_events: deque = deque(maxlen=100)  # Últimos 100 eventos
+        
+        # Rastreo de procesamiento de ZIP (persiste entre batches)
+        self._current_processing_zip = None
+        self._current_zip_output = None
 
         self._build_style()
         self._build_layout()
@@ -427,10 +432,7 @@ class ZipWatcherApp(tk.Tk):
         header = ttk.Frame(main, style="Toolbar.TFrame")
         header.pack(side="top", fill="x") # Sin padding, estilo flat
 
-        # Título app
-        title_frame = ttk.Frame(header, style="Toolbar.TFrame")
-        title_frame.pack(side="left", padx=18, pady=12)
-        tk.Label(title_frame, text="ZIP Watcher", font=("Segoe UI", 16, "bold"), bg="#ffffff").pack(side="left")
+        # Header simplificado: solo Status pill (título removido por UX cleanup)
         
         # Status pill (mejorado)
         self.status_text = tk.StringVar(value="Listo")
@@ -518,9 +520,50 @@ class ZipWatcherApp(tk.Tk):
         stats_col.pack(side="right")
         
         self.counts_var = tk.StringVar(value="✅ 0   ⚠️ 0   ❌ 0")
-        ttk.Label(stats_col, text="Actividad de sesión", background="#ffffff", foreground="#9ca3af", font=("Segoe UI", 9)).pack(anchor="e")
+        ttk.Label(stats_col, text="Sesión", background="#ffffff", foreground="#9ca3af", font=("Segoe UI", 9)).pack(anchor="e")
         ttk.Label(stats_col, textvariable=self.counts_var, background="#ffffff", font=("Segoe UI", 12, "bold")).pack(anchor="e")
 
+        # Tabla de Eventos Procesados
+        events_card = ttk.Frame(self.tab_home, style="Card.TFrame")
+        events_card.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        
+        events_header = ttk.Frame(events_card, style="Card.TFrame")
+        events_header.pack(fill="x", padx=14, pady=(14, 0))
+        
+        tk.Label(events_header, text="Eventos Procesados", background="#ffffff", font=("Segoe UI", 11, "bold"), fg="#111827").pack(side="left")
+        
+        ttk.Button(events_header, text="🗑️ Limpiar", command=self.clear_events_table).pack(side="right")
+        
+        # Tabla con Treeview
+        table_container = ttk.Frame(events_card, style="Card.TFrame")
+        table_container.pack(fill="both", expand=True, padx=14, pady=(10, 14))
+        
+        # Scrollbar
+        table_scroll = ttk.Scrollbar(table_container)
+        table_scroll.pack(side="right", fill="y")
+        
+        # Treeview
+        columns = ("id", "hora", "zip", "resultado", "output")
+        self.events_tree = ttk.Treeview(table_container, columns=columns, show="headings", height=6, yscrollcommand=table_scroll.set)
+        
+        self.events_tree.heading("id", text="ID")
+        self.events_tree.heading("hora", text="Hora")
+        self.events_tree.heading("zip", text="Archivo ZIP")
+        self.events_tree.heading("resultado", text="Estado")
+        self.events_tree.heading("output", text="Carpeta Salida")
+        
+        self.events_tree.column("id", width=50, anchor="center")
+        self.events_tree.column("hora", width=140, anchor="w")
+        self.events_tree.column("zip", width=250, anchor="w")
+        self.events_tree.column("resultado", width=120, anchor="center")
+        self.events_tree.column("output", width=200, anchor="w")
+        
+        self.events_tree.pack(side="left", fill="both", expand=True)
+        table_scroll.config(command=self.events_tree.yview)
+        
+        # Doble click para abrir carpeta
+        self.events_tree.bind("<Double-Button-1>", self._on_event_double_click)
+        
         # Logs container (ocupa el resto)
         logs_frame = ttk.Frame(self.tab_home, style="Card.TFrame")
         logs_frame.pack(fill="both", expand=True, padx=18, pady=(0, 18))
@@ -597,8 +640,8 @@ class ZipWatcherApp(tk.Tk):
         self.var_tries = tk.StringVar()
         self.var_scan = tk.StringVar()
 
-        tk.Label(cfg, text="Carpeta de vigilancia", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w")
-        tk.Label(cfg, text="Los archivos ZIP que aparezcan aquí serán procesados.", background="#ffffff", fg="#6b7280").pack(anchor="w", pady=(0, 6))
+        tk.Label(cfg, text="Ruta de vigilancia", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w")
+        # Descripción eliminada por ruido visual
         
         row_dir = ttk.Frame(cfg, style="Card.TFrame")
         row_dir.pack(fill="x", pady=(0, 16))
@@ -606,7 +649,7 @@ class ZipWatcherApp(tk.Tk):
         ttk.Button(row_dir, text="Explorar...", command=self.browse_folder).pack(side="left", padx=(8, 0))
 
         # Opciones avanzadas siempre visibles en pestaña dedicada
-        tk.Label(cfg, text="Opciones de detección", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w", pady=(6, 0))
+        tk.Label(cfg, text="Parámetros", background="#ffffff", font=("Segoe UI", 10, "bold"), fg="#374151").pack(anchor="w", pady=(6, 0))
         
         row_opts = ttk.Frame(cfg, style="Card.TFrame")
         row_opts.pack(fill="x", pady=(8, 0))
@@ -619,9 +662,9 @@ class ZipWatcherApp(tk.Tk):
             ttk.Entry(f, textvariable=var, width=15).pack(anchor="w", pady=(2, 0))
             return f
 
-        config_field(row_opts, "Tiempo espera (s)", self.var_poll, "Tiempo para verificar copia completa").pack(side="left", padx=(0, 20))
-        config_field(row_opts, "Intentos máx.", self.var_tries, "Intentos antes de error").pack(side="left", padx=(0, 20))
-        config_field(row_opts, "Escaneo (s)", self.var_scan, "Intervalo de chequeo").pack(side="left")
+        config_field(row_opts, "Espera (s)", self.var_poll, "Tiempo de estabilidad del archivo").pack(side="left", padx=(0, 20))
+        config_field(row_opts, "Reintentos", self.var_tries, "Máximo de intentos de acceso").pack(side="left", padx=(0, 20))
+        config_field(row_opts, "Frecuencia (s)", self.var_scan, "Intervalo de escaneo de carpeta").pack(side="left")
         
         # Botón guardar grande
         ttk.Separator(cfg).pack(fill="x", pady=20)
@@ -641,18 +684,18 @@ class ZipWatcherApp(tk.Tk):
         
         row_m1 = ttk.Frame(maint, style="Card.TFrame")
         row_m1.pack(fill="x", pady=(0, 16))
-        self.btn_clean_processed = ttk.Button(row_m1, text="Limpiar 'Processed'", command=lambda: self.clean_dir_to_trash("processed"))
+        self.btn_clean_processed = ttk.Button(row_m1, text="Processed", command=lambda: self.clean_dir_to_trash("processed"))
         self.btn_clean_processed.pack(side="left", padx=(0, 8))
-        self.btn_clean_extracted = ttk.Button(row_m1, text="Limpiar 'Extracted'", command=lambda: self.clean_dir_to_trash("extracted"))
+        self.btn_clean_extracted = ttk.Button(row_m1, text="Extracted", command=lambda: self.clean_dir_to_trash("extracted"))
         self.btn_clean_extracted.pack(side="left", padx=(0, 8))
-        self.btn_clean_output = ttk.Button(row_m1, text="Limpiar 'Output'", command=lambda: self.clean_dir_to_trash("output"))
+        self.btn_clean_output = ttk.Button(row_m1, text="Output", command=lambda: self.clean_dir_to_trash("output"))
         self.btn_clean_output.pack(side="left")
         
         ttk.Separator(maint).pack(fill="x", pady=16)
         
-        ttk.Label(maint, text="Acciones destructivas", background="#ffffff", font=("Segoe UI", 11, "bold"), foreground="#dc2626").pack(anchor="w", pady=(0, 8))
+        ttk.Label(maint, text="Zona de riesgo", background="#ffffff", font=("Segoe UI", 11, "bold"), foreground="#dc2626").pack(anchor="w", pady=(0, 8))
         
-        self.btn_clean_all = ttk.Button(maint, text="🧹 Mover TODO a papelera", command=self.clean_all_to_trash)
+        self.btn_clean_all = ttk.Button(maint, text="🧹 Vaciar carpetas", command=self.clean_all_to_trash)
         self.btn_clean_all.pack(anchor="w", pady=(0, 8))
         self.btn_empty_trash = ttk.Button(maint, text="🗑️ Vaciar papelera definitivamente", style="Danger.TButton", command=self.empty_trash)
         self.btn_empty_trash.pack(anchor="w")
@@ -698,10 +741,8 @@ class ZipWatcherApp(tk.Tk):
         self.side_state_emoji = tk.StringVar(value="🔴")
         self.side_state_text = tk.StringVar(value="Detenido")
         
-        state_row = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
-        state_row.pack(anchor="w", padx=14, pady=(0, 10))
-        tk.Label(state_row, textvariable=self.side_state_emoji, background="#111827", font=("Segoe UI", 14)).pack(side="left")
-        tk.Label(state_row, textvariable=self.side_state_text, background="#111827", foreground="#e5e7eb", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(6, 0))
+        # Solo texto de estado (emoji removido por UX cleanup)
+        tk.Label(self.sidebar, textvariable=self.side_state_text, background="#111827", foreground="#e5e7eb", font=("Segoe UI", 10, "bold"), anchor="w", padx=14, pady=10).pack(anchor="w")
 
         ttk.Separator(self.sidebar).pack(fill="x", padx=14, pady=(12, 10))
 
@@ -1386,6 +1427,83 @@ LOG DETALLADO:
 
         self.emit("SEARCH", f"Búsqueda '{q}': {hits} coincidencias (sobre vista filtrada).")
 
+    # ========== Gestión de Tabla de Eventos Procesados ==========
+    
+    def add_processed_event(self, zip_name: str, result: str, output_path: str = ""):
+        """Registra un evento de procesamiento en la tabla."""
+        self._event_counter += 1
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        event_id = f"#{self._event_counter:04d}"
+        
+        # Guardar en memoria
+        event_data = {
+            "id": event_id,
+            "timestamp": timestamp,
+            "zip": zip_name,
+            "result": result,
+            "output": output_path
+        }
+        self._processed_events.append(event_data)
+        
+        # Insertar en la tabla (al inicio para mostrar los más recientes primero)
+        self.events_tree.insert("", 0, values=(
+            event_id,
+            timestamp,
+            zip_name,
+            result,
+            output_path if output_path else "N/A"
+        ))
+        
+        # Aplicar color según resultado
+        item = self.events_tree.get_children()[0]
+        if "✅" in result or "ÉXITO" in result.upper():
+            self.events_tree.item(item, tags=("success",))
+        elif "⚠" in result or "WARN" in result.upper():
+            self.events_tree.item(item, tags=("warning",))
+        elif "❌" in result or "ERROR" in result.upper():
+            self.events_tree.item(item, tags=("error",))
+        
+        # Configurar colores de tags
+        self.events_tree.tag_configure("success", foreground="#059669")
+        self.events_tree.tag_configure("warning", foreground="#d97706")
+        self.events_tree.tag_configure("error", foreground="#dc2626")
+    
+    def clear_events_table(self):
+        """Limpia la tabla de eventos."""
+        if not messagebox.askyesno("Confirmar", "¿Limpiar todos los eventos procesados?"):
+            return
+        
+        for item in self.events_tree.get_children():
+            self.events_tree.delete(item)
+        
+        self._processed_events.clear()
+        self._event_counter = 0
+        self.emit("INFO", "Tabla de eventos limpiada.")
+    
+    def _on_event_double_click(self, event):
+        """Maneja el doble click en la tabla para abrir carpeta de salida."""
+        selection = self.events_tree.selection()
+        if not selection:
+            return
+        
+        item = selection[0]
+        values = self.events_tree.item(item, "values")
+        
+        if len(values) >= 5:
+            output_path = values[4]  # Columna "output"
+            
+            if output_path and output_path != "N/A":
+                try:
+                    # Abrir carpeta padre del archivo
+                    folder = Path(output_path).parent
+                    if folder.exists():
+                        import os
+                        os.startfile(str(folder))
+                    else:
+                        messagebox.showwarning("Carpeta no encontrada", f"La ruta no existe:\n{folder}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
+
     # ---------- Log pump + rendering (BATCH)
     def _tick_logs(self):
         drained: list[LogEvent] = []
@@ -1415,6 +1533,47 @@ LOG DETALLADO:
 
             if self._level_visible(ev.level):
                 visible_events.append(ev)
+            
+            # Detectar eventos de procesamiento de ZIP (usando variables de instancia)
+            if ev.level == "ZIP" and "Detectado ZIP:" in ev.msg:
+                # Extraer nombre del ZIP
+                self._current_processing_zip = ev.msg.split("Detectado ZIP:")[-1].strip()
+                self._current_zip_output = None  # Reset output
+            
+            elif self._current_processing_zip and ev.level == "OK" and "Creado ZIP:" in ev.msg:
+                # Extraer ruta del output
+                zip_output_name = ev.msg.split("Creado ZIP:")[-1].strip()
+                # Construir ruta completa
+                wd = self._watch_dir()
+                if wd:
+                    output_dir = wd / (self.settings.get("output_subdir") or "output")
+                    self._current_zip_output = str(output_dir / zip_output_name)
+                else:
+                    self._current_zip_output = zip_output_name
+            
+            elif self._current_processing_zip and ev.level == "OK" and "Original movido a:" in ev.msg:
+                # Proceso completado exitosamente
+                self.add_processed_event(
+                    self._current_processing_zip, 
+                    "✅ ÉXITO", 
+                    self._current_zip_output if self._current_zip_output else ""
+                )
+                self._current_processing_zip = None
+                self._current_zip_output = None
+            
+            elif self._current_processing_zip and ev.level == "ERROR":
+                # Error durante el procesamiento
+                error_msg = ev.msg[:50] + "..." if len(ev.msg) > 50 else ev.msg
+                self.add_processed_event(self._current_processing_zip, f"❌ ERROR: {error_msg}", "")
+                self._current_processing_zip = None
+                self._current_zip_output = None
+            
+            elif self._current_processing_zip and ev.level == "WARN" and ("ZIP corrupto" in ev.msg or "ZIP no válido" in ev.msg or "No hay carpetas" in ev.msg):
+                # Advertencia crítica que detiene el proceso
+                warn_msg = ev.msg[:50] + "..." if len(ev.msg) > 50 else ev.msg
+                self.add_processed_event(self._current_processing_zip, f"⚠️ ADVERTENCIA: {warn_msg}", "")
+                self._current_processing_zip = None
+                self._current_zip_output = None
 
         self._update_counts_label()
         self._refresh_dashboard_paths()
