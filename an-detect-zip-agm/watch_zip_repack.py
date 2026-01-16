@@ -49,6 +49,11 @@ DEFAULT_MAX_RECENT_EVENTS = 50
 DEFAULT_MAX_LOG_STORE = 5000  # <-- NUEVO: límite de logs en memoria
 MIN_SCAN_INTERVAL = 0.2
 
+# Directorio de sesiones
+SESSIONS_DIR = app_dir() / "sessions"
+SESSIONS_DIR.mkdir(exist_ok=True)
+AUTO_SESSION_FILE = SESSIONS_DIR / "last_session.json"
+
 DEFAULT_SETTINGS = {
     "watch_dir": "",
     "extract_subdir": DEFAULT_EXTRACT_SUBDIR,
@@ -382,6 +387,9 @@ class ZipWatcherApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._set_status("Listo", "idle")
+        
+        # Cargar última sesión automáticamente
+        self.after(500, lambda: self.load_session(AUTO_SESSION_FILE))
 
         # Bind redimensionamiento para ajustar wraplength dinámicamente
         self.bind("<Configure>", self._on_resize)
@@ -532,6 +540,9 @@ class ZipWatcherApp(tk.Tk):
         
         tk.Label(events_header, text="Eventos Procesados", background="#ffffff", font=("Segoe UI", 11, "bold"), fg="#111827").pack(side="left")
         
+        # Botones de gestión de sesión
+        ttk.Button(events_header, text="📥 Importar Sesión", command=self.import_session).pack(side="right", padx=(0, 4))
+        ttk.Button(events_header, text="💾 Exportar Sesión", command=self.export_session).pack(side="right", padx=(0, 8))
         ttk.Button(events_header, text="🗑️ Limpiar", command=self.clear_events_table).pack(side="right")
         
         # Tabla con Treeview
@@ -1504,6 +1515,153 @@ LOG DETALLADO:
                 except Exception as e:
                     messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
 
+    # ========== Gestión de Sesiones ==========
+    
+    def save_session(self, filename: Path = None):
+        """Guarda la sesión actual (eventos + logs) en un archivo JSON."""
+        if filename is None:
+            filename = AUTO_SESSION_FILE
+        
+        try:
+            # Convertir eventos a formato serializable
+            events_data = [
+                {
+                    "id": ev["id"],
+                    "timestamp": ev["timestamp"],
+                    "zip": ev["zip"],
+                    "result": ev["result"],
+                    "output": ev["output"]
+                }
+                for ev in self._processed_events
+            ]
+            
+            # Convertir logs a formato serializable
+            logs_data = [
+                {
+                    "level": log.level,
+                    "msg": log.msg,
+                    "timestamp": log.ts
+                }
+                for log in self._log_store
+            ]
+            
+            session_data = {
+                "version": "2.0",
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "watch_dir": self.settings.get("watch_dir", ""),
+                "event_counter": self._event_counter,
+                "events": events_data,
+                "logs": logs_data,
+                "counters": {
+                    "info": self._count_info,
+                    "ok": self._count_ok,
+                    "warn": self._count_warn,
+                    "error": self._count_error
+                }
+            }
+            
+            filename.parent.mkdir(parents=True, exist_ok=True)
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, indent=2, ensure_ascii=False)
+            
+            return True
+        except Exception as e:
+            self.emit("ERROR", f"Error guardando sesión: {e}")
+            return False
+    
+    def load_session(self, filename: Path):
+        """Carga una sesión desde un archivo JSON."""
+        try:
+            if not filename.exists():
+                return False
+            
+            with open(filename, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            
+            # Restaurar contador de eventos
+            self._event_counter = session_data.get("event_counter", 0)
+            
+            # Restaurar eventos procesados
+            self._processed_events.clear()
+            for item in self.events_tree.get_children():
+                self.events_tree.delete(item)
+            
+            for ev_data in session_data.get("events", []):
+                self._processed_events.append(ev_data)
+                self.events_tree.insert("", "end", values=(
+                    ev_data["id"],
+                    ev_data["timestamp"],
+                    ev_data["zip"],
+                    ev_data["result"],
+                    ev_data.get("output", "N/A")
+                ))
+                
+                # Aplicar colores
+                item = self.events_tree.get_children()[-1]
+                result = ev_data["result"]
+                if "✅" in result:
+                    self.events_tree.item(item, tags=("success",))
+                elif "⚠" in result:
+                    self.events_tree.item(item, tags=("warning",))
+                elif "❌" in result:
+                    self.events_tree.item(item, tags=("error",))
+            
+            # Configurar tags de color
+            self.events_tree.tag_configure("success", foreground="#059669")
+            self.events_tree.tag_configure("warning", foreground="#d97706")
+            self.events_tree.tag_configure("error", foreground="#dc2626")
+            
+            # Restaurar contadores
+            counters = session_data.get("counters", {})
+            self._count_info = counters.get("info", 0)
+            self._count_ok = counters.get("ok", 0)
+            self._count_warn = counters.get("warn", 0)
+            self._count_error = counters.get("error", 0)
+            self._update_counts_label()
+            
+            # Restaurar logs (opcional, puede ser pesado)
+            # Los logs se reconstruirán naturalmente con nuevos eventos
+            
+            self.emit("INFO", f"Sesión cargada: {session_data.get('saved_at', 'desconocida')}")
+            return True
+            
+        except Exception as e:
+            self.emit("ERROR", f"Error cargando sesión: {e}")
+            return False
+    
+    def export_session(self):
+        """Exporta la sesión actual a un archivo elegido por el usuario."""
+        default_name = f"session_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        
+        filepath = filedialog.asksaveasfilename(
+            title="Exportar Sesión",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir=str(SESSIONS_DIR),
+            initialfile=default_name
+        )
+        
+        if filepath:
+            if self.save_session(Path(filepath)):
+                messagebox.showinfo("Exportado", f"Sesión exportada a:\n{filepath}")
+                self.emit("OK", f"Sesión exportada: {filepath}")
+    
+    def import_session(self):
+        """Importa una sesión desde un archivo elegido por el usuario."""
+        filepath = filedialog.askopenfilename(
+            title="Importar Sesión",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir=str(SESSIONS_DIR)
+        )
+        
+        if filepath:
+            if messagebox.askyesno("Confirmar", "¿Reemplazar la sesión actual con la importada?\nSe perderán los datos actuales no guardados."):
+                if self.load_session(Path(filepath)):
+                    messagebox.showinfo("Importado", "Sesión importada correctamente.")
+                else:
+                    messagebox.showerror("Error", "No se pudo importar la sesión.")
+
     # ---------- Log pump + rendering (BATCH)
     def _tick_logs(self):
         drained: list[LogEvent] = []
@@ -1673,6 +1831,9 @@ LOG DETALLADO:
             if not messagebox.askyesno("Salir", "El watcher está en ejecución. ¿Parar y salir?"):
                 return
             self._stop_event.set()
+        
+        # Guardar sesión automáticamente antes de cerrar
+        self.save_session()
         self.destroy()
 
 
