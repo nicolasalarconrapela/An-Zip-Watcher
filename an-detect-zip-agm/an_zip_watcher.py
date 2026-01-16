@@ -364,7 +364,7 @@ class ZipWatcherApp(tk.Tk):
                 self.iconbitmap(str(ico_path))
             
             # 2. Imágenes para la UI (PNG)
-            png_path = app_dir() / "imgs" / "icons.ico"
+            png_path = app_dir() / "imgs" / "icons.png"
             if png_path.exists():
                 self._app_icon = tk.PhotoImage(file=str(png_path))
                 # Crear versión pequeña para Sidebar

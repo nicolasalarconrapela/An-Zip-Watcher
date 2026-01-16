@@ -48,7 +48,7 @@
 
 1. Ejecuta la aplicación:
    ```bash
-   py watch_zip_repack.py
+   py an_zip_watcher.py
    ```
 2. **Primera Vez**: La app te pedirá seleccionar una "Carpeta de Vigilancia".
 3. **Configurar**: Ajusta los parámetros si es necesario y guarda.

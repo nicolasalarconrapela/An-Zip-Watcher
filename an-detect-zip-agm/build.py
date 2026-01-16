@@ -125,7 +125,7 @@ def build_executable():
     print_header("Building Executable with PyInstaller")
     
     args = get_platform_specific_args()
-    args.append("watch_zip_repack.py")
+    args.append("an_zip_watcher.py")
     
     print_info(f"Platform: {platform.system()}")
     print_info(f"Python: {sys.version.split()[0]}")
