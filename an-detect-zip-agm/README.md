@@ -1,6 +1,14 @@
 # <img src="imgs/icons.png" width="48" height="48" align="center"/> An-Zip-Watcher
 
-**v2.0.0**
+![Imagen_Home](imgs/readme/image_home_ok.png)
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows-green.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-green.svg)
+
+_Construido por AnAppWiLos y ViveCoding :)_
+## **v2.0.0**
 
 **An-Zip-Watcher** es una herramienta de monitoreo y automatización para el procesamiento de archivos ZIP. Detecta automáticamente nuevos archivos en una carpeta vigilada, los descomprime, procesa su contenido y genera un nuevo paquete ZIP estandarizado en una carpeta de salida, manteniendo un registro detallado de todas las operaciones.
 
