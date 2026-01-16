@@ -541,8 +541,9 @@ class ZipWatcherApp(tk.Tk):
         tk.Label(events_header, text="Eventos Procesados", background="#ffffff", font=("Segoe UI", 11, "bold"), fg="#111827").pack(side="left")
         
         # Botones de gestión de sesión
-        ttk.Button(events_header, text="📥 Importar Sesión", command=self.import_session).pack(side="right", padx=(0, 4))
-        ttk.Button(events_header, text="💾 Exportar Sesión", command=self.export_session).pack(side="right", padx=(0, 8))
+        ttk.Button(events_header, text="🔍 Verificar", command=self.verify_missing_files).pack(side="right", padx=(0, 4))
+        ttk.Button(events_header, text="📥 Importar", command=self.import_session).pack(side="right", padx=(0, 4))
+        ttk.Button(events_header, text="💾 Exportar", command=self.export_session).pack(side="right", padx=(0, 8))
         ttk.Button(events_header, text="🗑️ Limpiar", command=self.clear_events_table).pack(side="right")
         
         # Tabla con Treeview
@@ -1514,6 +1515,67 @@ LOG DETALLADO:
                         messagebox.showwarning("Carpeta no encontrada", f"La ruta no existe:\n{folder}")
                 except Exception as e:
                     messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
+
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
+
+    def verify_missing_files(self):
+        """Verifica si los archivos de salida existen o si han sido movidos a trash/borrados."""
+        trash_dir = self._dir("trash")
+        changes_count = 0
+        
+        for item in self.events_tree.get_children():
+            values = self.events_tree.item(item, "values")
+            if len(values) < 5:
+                continue
+                
+            current_status = values[3]
+            output_path = values[4]
+            zip_name = values[2]
+            
+            # Solo verificar si tiene un path válido y no ha fallado previamente
+            if output_path and output_path != "N/A" and "ERROR" not in current_status:
+                path = Path(output_path)
+                
+                new_status = current_status
+                
+                if not path.exists():
+                    # El archivo no está donde debería. Buscar en Trash.
+                    is_in_trash = False
+                    if trash_dir and trash_dir.exists():
+                        # Buscar por nombre de archivo en trash
+                        potential_trash_path = trash_dir / path.name
+                        if potential_trash_path.exists():
+                            is_in_trash = True
+                        else:
+                            # Intentar búsqueda más laxa en trash (por si acaso nombre cambió ligeramente)
+                            for t_file in trash_dir.iterdir():
+                                if t_file.name == path.name:
+                                    is_in_trash = True
+                                    break
+                    
+                    if is_in_trash:
+                        new_status = "🗑️ TRASH"
+                        self.events_tree.item(item, tags=("trash",))
+                    else:
+                        new_status = "👻 MISSING"
+                        self.events_tree.item(item, tags=("missing",))
+                
+                # Actualizar si cambió el estado
+                if new_status != current_status:
+                    new_values = list(values)
+                    new_values[3] = new_values[3] + " → " + new_status if "→" not in new_values[3] else new_status
+                    self.events_tree.item(item, values=new_values)
+                    changes_count += 1
+        
+        # Configurar colores nuevos
+        self.events_tree.tag_configure("trash", foreground="#9ca3af") # Gris
+        self.events_tree.tag_configure("missing", foreground="#ef4444", font=("Segoe UI", 9, "bold")) # Rojo alerta
+        
+        if changes_count > 0:
+            messagebox.showinfo("Verificación", f"Se actualizaron {changes_count} eventos.\nAlgunos archivos han sido movidos a la papelera o eliminados.")
+        else:
+            messagebox.showinfo("Verificación", "Todos los archivos verificados están accesibles.")
 
     # ========== Gestión de Sesiones ==========
     
