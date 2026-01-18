@@ -286,11 +286,18 @@ def process_zip(zip_path: Path, watch_dir: Path, settings: dict, emit: EmitFunc)
 # =========================
 
 class WatcherThread(threading.Thread):
-    def __init__(self, settings_getter: Callable[[], dict], emit: EmitFunc, stop_event: threading.Event):
+    def __init__(
+        self,
+        settings_getter: Callable[[], dict],
+        emit: EmitFunc,
+        stop_event: threading.Event,
+        zip_queue: "queue.Queue[Path]",
+    ):
         super().__init__(daemon=True)
         self.settings_getter = settings_getter
         self.emit = emit
         self.stop_event = stop_event
+        self.zip_queue = zip_queue
         self.seen: set[Tuple[str, int, int]] = set()
 
     def run(self):
@@ -330,7 +337,8 @@ class WatcherThread(threading.Thread):
                         fp = (str(p), st.st_mtime_ns, st.st_size)
                         if fp not in self.seen:
                             self.seen.add(fp)
-                            process_zip(p, watch_dir, settings, self.emit)
+                            self.zip_queue.put(p)
+                            self.emit("INFO", f"ZIP en cola: {p.name}")
                     except FileNotFoundError:
                         continue
                     except Exception as e:
@@ -344,6 +352,46 @@ class WatcherThread(threading.Thread):
             time.sleep(max(0.2, scan_interval))
 
         self.emit("STOP", "Watcher detenido.")
+
+
+class ZipProcessorThread(threading.Thread):
+    def __init__(
+        self,
+        settings_getter: Callable[[], dict],
+        emit: EmitFunc,
+        stop_event: threading.Event,
+        zip_queue: "queue.Queue[Path]",
+    ):
+        super().__init__(daemon=True)
+        self.settings_getter = settings_getter
+        self.emit = emit
+        self.stop_event = stop_event
+        self.zip_queue = zip_queue
+
+    def run(self):
+        self.emit("START", "Procesador de ZIP iniciado.")
+        while True:
+            if self.stop_event.is_set() and self.zip_queue.empty():
+                break
+            try:
+                zip_path = self.zip_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                settings = self.settings_getter()
+                watch_dir_raw = (settings.get("watch_dir") or "").strip()
+                if not watch_dir_raw:
+                    self.emit("WARN", "No hay carpeta de vigilancia configurada para procesar.")
+                else:
+                    watch_dir = Path(watch_dir_raw).expanduser().resolve()
+                    process_zip(zip_path, watch_dir, settings, self.emit)
+            except Exception as e:
+                self.emit("WARN", f"Error en cola de procesamiento: {e}")
+            finally:
+                self.zip_queue.task_done()
+
+        self.emit("STOP", "Procesador de ZIP detenido.")
 
 
 # =========================
@@ -385,8 +433,10 @@ class ZipWatcherApp(tk.Tk):
         self.settings = load_settings()
 
         self._log_queue: "queue.Queue[LogEvent]" = queue.Queue()
+        self._zip_queue: "queue.Queue[Path]" = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: WatcherThread | None = None
+        self._processor: ZipProcessorThread | None = None
 
         # store para logs (LIMITADO con deque)
         self._max_log_store = int(self.settings.get("max_log_store", DEFAULT_MAX_LOG_STORE))
@@ -946,7 +996,10 @@ class ZipWatcherApp(tk.Tk):
             self.side_state_text.set("Detenido")
 
     def _is_running(self) -> bool:
-        return bool(self._worker and self._worker.is_alive())
+        return bool(
+            (self._worker and self._worker.is_alive())
+            or (self._processor and self._processor.is_alive())
+        )
 
     def settings_getter(self):
         return dict(self.settings)
@@ -1078,8 +1131,10 @@ class ZipWatcherApp(tk.Tk):
         self.save_from_form()
 
         self._stop_event.clear()
-        self._worker = WatcherThread(self.settings_getter, self.emit, self._stop_event)
+        self._worker = WatcherThread(self.settings_getter, self.emit, self._stop_event, self._zip_queue)
+        self._processor = ZipProcessorThread(self.settings_getter, self.emit, self._stop_event, self._zip_queue)
         self._worker.start()
+        self._processor.start()
 
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
@@ -1093,6 +1148,7 @@ class ZipWatcherApp(tk.Tk):
         if not self._is_running():
             return
         self._stop_event.set()
+        self._drain_zip_queue()
         self._set_status("Deteniendo…", UIStatus.STOPPING.value)
         self.btn_stop.configure(state="disabled")
         self.btn_start.configure(state="disabled")
@@ -1100,7 +1156,7 @@ class ZipWatcherApp(tk.Tk):
         self.after(150, self._join_worker)
 
     def _join_worker(self):
-        if self._worker and self._worker.is_alive():
+        if (self._worker and self._worker.is_alive()) or (self._processor and self._processor.is_alive()):
             self.after(150, self._join_worker)
             return
 
@@ -1109,6 +1165,18 @@ class ZipWatcherApp(tk.Tk):
         self._set_maintenance_enabled(True)
         self._set_status("Parado", UIStatus.IDLE.value)
         self.emit("STOP", "Watcher parado.")
+
+    def _drain_zip_queue(self):
+        drained = 0
+        try:
+            while True:
+                self._zip_queue.get_nowait()
+                self._zip_queue.task_done()
+                drained += 1
+        except queue.Empty:
+            pass
+        if drained:
+            self.emit("INFO", f"Cola de ZIPs vaciada ({drained}).")
 
     def _set_maintenance_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"

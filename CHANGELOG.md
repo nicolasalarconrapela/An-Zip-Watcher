@@ -5,6 +5,14 @@ Todos los cambios relevantes de este repositorio se documentarán en este archiv
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.1.2] - 2026-01-18
+
+### Added
+- Procesamiento en cola para los ZIPs detectados dentro del proyecto `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.0.
+
 ## [0.1.1] - 2026-01-18
 
 ### Added
