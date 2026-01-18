@@ -1178,6 +1178,13 @@ class ZipWatcherApp(tk.Tk):
         if drained:
             self.emit("INFO", f"Cola de ZIPs vaciada ({drained}).")
 
+    def _shutdown_threads(self):
+        self._stop_event.set()
+        self._drain_zip_queue()
+        for thread in (self._worker, self._processor):
+            if thread and thread.is_alive():
+                thread.join(timeout=2)
+
     def _set_maintenance_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"
         for btn in (
@@ -2007,7 +2014,7 @@ LOG DETALLADO:
         if self._is_running():
             if not messagebox.askyesno("Salir", "El watcher está en ejecución. ¿Parar y salir?"):
                 return
-            self._stop_event.set()
+            self._shutdown_threads()
         
         # Guardar sesión automáticamente antes de cerrar
         self.save_session()
