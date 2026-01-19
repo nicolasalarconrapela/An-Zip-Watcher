@@ -451,6 +451,8 @@ class ZipWatcherApp(tk.Tk):
         # Rastreo de procesamiento de ZIP (persiste entre batches)
         self._current_processing_zip = None
         self._current_zip_output = None
+        self._last_events_refresh = 0.0
+        self._events_refresh_interval = 10.0
 
         self._build_style()
         self._build_layout()
@@ -1350,6 +1352,7 @@ class ZipWatcherApp(tk.Tk):
         moved, total, batch_dir = self._move_dir_contents_to_trash(src, trash, which)
         self.emit("CLEAN", f"{which.upper()} limpiado: {moved}/{total} movidos a {batch_dir}")
         messagebox.showinfo("Completado", f"{which.upper()} → Trash\nMovidos {moved}/{total} a:\n{batch_dir}")
+        self._refresh_processed_events_status(show_dialog=False)
 
     def clean_all_to_trash(self):
         if self._is_running():
@@ -1401,6 +1404,7 @@ class ZipWatcherApp(tk.Tk):
             "Limpieza total completada",
             f"Movidos {total_moved}/{total_items} elementos.\n\nDestinos:\n" + "\n".join(batches[:10]) + ("\n..." if len(batches) > 10 else "")
         )
+        self._refresh_processed_events_status(show_dialog=False)
 
     def empty_trash(self):
         if self._is_running():
@@ -1448,6 +1452,7 @@ class ZipWatcherApp(tk.Tk):
 
         self.emit("TRASH", f"Trash vaciado: {deleted}/{len(items)} eliminados definitivamente")
         messagebox.showinfo("Trash", f"Eliminados {deleted}/{len(items)} elementos de Trash.")
+        self._refresh_processed_events_status(show_dialog=False)
 
     # ========= Logs UI =========
 
@@ -1641,63 +1646,74 @@ LOG DETALLADO:
                 except Exception as e:
                     messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
 
-    def verify_missing_files(self):
-        """Verifica si los archivos de salida existen o si han sido movidos a trash/borrados."""
+    def _refresh_processed_events_status(self, show_dialog: bool) -> int:
+        """Actualiza el estado de eventos procesados (trash/missing)."""
         trash_dir = self._dir("trash")
         changes_count = 0
-        
+
         for item in self.events_tree.get_children():
             values = self.events_tree.item(item, "values")
             if len(values) < 5:
                 continue
-                
+
             current_status = values[3]
             output_path = values[4]
-            zip_name = values[2]
-            
+
             # Solo verificar si tiene un path válido y no ha fallado previamente
             if output_path and output_path != "N/A" and "ERROR" not in current_status:
                 path = Path(output_path)
-                
+
                 new_status = current_status
-                
+
                 if not path.exists():
-                    # El archivo no está donde debería. Buscar en Trash.
+                    # El archivo no está donde debería. Buscar en Trash (recursivo).
                     is_in_trash = False
                     if trash_dir and trash_dir.exists():
-                        # Buscar por nombre de archivo en trash
-                        potential_trash_path = trash_dir / path.name
-                        if potential_trash_path.exists():
-                            is_in_trash = True
-                        else:
-                            # Intentar búsqueda más laxa en trash (por si acaso nombre cambió ligeramente)
-                            for t_file in trash_dir.iterdir():
-                                if t_file.name == path.name:
-                                    is_in_trash = True
-                                    break
-                    
+                        for t_file in trash_dir.rglob(path.name):
+                            if t_file.is_file() and t_file.name == path.name:
+                                is_in_trash = True
+                                break
+
                     if is_in_trash:
                         new_status = "🗑️ TRASH"
                         self.events_tree.item(item, tags=("trash",))
                     else:
                         new_status = "👻 MISSING"
                         self.events_tree.item(item, tags=("missing",))
-                
+
                 # Actualizar si cambió el estado
                 if new_status != current_status:
                     new_values = list(values)
                     new_values[3] = new_values[3] + " → " + new_status if "→" not in new_values[3] else new_status
                     self.events_tree.item(item, values=new_values)
                     changes_count += 1
-        
+
         # Configurar colores nuevos
-        self.events_tree.tag_configure("trash", foreground="#9ca3af") # Gris
-        self.events_tree.tag_configure("missing", foreground="#ef4444", font=("Segoe UI", 9, "bold")) # Rojo alerta
-        
-        if changes_count > 0:
-            messagebox.showinfo("Verificación", f"Se actualizaron {changes_count} eventos.\nAlgunos archivos han sido movidos a la papelera o eliminados.")
-        else:
-            messagebox.showinfo("Verificación", "Todos los archivos verificados están accesibles.")
+        self.events_tree.tag_configure("trash", foreground="#9ca3af")  # Gris
+        self.events_tree.tag_configure("missing", foreground="#ef4444", font=("Segoe UI", 9, "bold"))  # Rojo alerta
+
+        if show_dialog:
+            if changes_count > 0:
+                messagebox.showinfo(
+                    "Verificación",
+                    f"Se actualizaron {changes_count} eventos.\nAlgunos archivos han sido movidos a la papelera o eliminados."
+                )
+            else:
+                messagebox.showinfo("Verificación", "Todos los archivos verificados están accesibles.")
+
+        return changes_count
+
+    def _maybe_refresh_processed_events(self):
+        if not self._processed_events:
+            return
+        now = time.time()
+        if now - self._last_events_refresh >= self._events_refresh_interval:
+            self._refresh_processed_events_status(show_dialog=False)
+            self._last_events_refresh = now
+
+    def verify_missing_files(self):
+        """Verifica si los archivos de salida existen o si han sido movidos a trash/borrados."""
+        self._refresh_processed_events_status(show_dialog=True)
 
     # ========== Gestión de Sesiones ==========
     
@@ -1858,6 +1874,7 @@ LOG DETALLADO:
         if drained:
             self._handle_log_events_batch(drained)
 
+        self._maybe_refresh_processed_events()
         self.after(120, self._tick_logs)
 
     def _handle_log_events_batch(self, events: list[LogEvent]):

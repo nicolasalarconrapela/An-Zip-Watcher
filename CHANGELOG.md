@@ -5,6 +5,14 @@ Todos los cambios relevantes de este repositorio se documentarán en este archiv
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.1.6] - 2026-01-18
+
+### Fixed
+- Actualización automática de eventos procesados ante cambios externos y acciones de mantenimiento en `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.4.
+
 ## [0.1.5] - 2026-01-18
 
 ### Fixed
