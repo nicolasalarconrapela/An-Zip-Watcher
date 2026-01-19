@@ -5,6 +5,14 @@ Todos los cambios relevantes de este repositorio se documentarán en este archiv
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
 y este proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.1.10] - 2026-01-18
+
+### Fixed
+- Scroll horizontal activo aun sin iniciar el watcher en la tabla de eventos procesados de `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.8.
+
 ## [0.1.9] - 2026-01-18
 
 ### Fixed
