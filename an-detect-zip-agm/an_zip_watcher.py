@@ -291,7 +291,7 @@ class WatcherThread(threading.Thread):
         settings_getter: Callable[[], dict],
         emit: EmitFunc,
         stop_event: threading.Event,
-        zip_queue: "queue.Queue[Path]",
+        zip_queue: "queue.Queue[tuple[Path, Path]]",
     ):
         super().__init__(daemon=True)
         self.settings_getter = settings_getter
@@ -337,7 +337,7 @@ class WatcherThread(threading.Thread):
                         fp = (str(p), st.st_mtime_ns, st.st_size)
                         if fp not in self.seen:
                             self.seen.add(fp)
-                            self.zip_queue.put(p)
+                            self.zip_queue.put((p, watch_dir))
                             self.emit("INFO", f"ZIP en cola: {p.name}")
                     except FileNotFoundError:
                         continue
@@ -360,7 +360,7 @@ class ZipProcessorThread(threading.Thread):
         settings_getter: Callable[[], dict],
         emit: EmitFunc,
         stop_event: threading.Event,
-        zip_queue: "queue.Queue[Path]",
+        zip_queue: "queue.Queue[tuple[Path, Path]]",
     ):
         super().__init__(daemon=True)
         self.settings_getter = settings_getter
@@ -374,18 +374,13 @@ class ZipProcessorThread(threading.Thread):
             if self.stop_event.is_set() and self.zip_queue.empty():
                 break
             try:
-                zip_path = self.zip_queue.get(timeout=0.5)
+                zip_path, watch_dir = self.zip_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
 
             try:
                 settings = self.settings_getter()
-                watch_dir_raw = (settings.get("watch_dir") or "").strip()
-                if not watch_dir_raw:
-                    self.emit("WARN", "No hay carpeta de vigilancia configurada para procesar.")
-                else:
-                    watch_dir = Path(watch_dir_raw).expanduser().resolve()
-                    process_zip(zip_path, watch_dir, settings, self.emit)
+                process_zip(zip_path, watch_dir, settings, self.emit)
             except Exception as e:
                 self.emit("WARN", f"Error en cola de procesamiento: {e}")
             finally:
@@ -433,7 +428,7 @@ class ZipWatcherApp(tk.Tk):
         self.settings = load_settings()
 
         self._log_queue: "queue.Queue[LogEvent]" = queue.Queue()
-        self._zip_queue: "queue.Queue[Path]" = queue.Queue()
+        self._zip_queue: "queue.Queue[tuple[Path, Path]]" = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: WatcherThread | None = None
         self._processor: ZipProcessorThread | None = None
