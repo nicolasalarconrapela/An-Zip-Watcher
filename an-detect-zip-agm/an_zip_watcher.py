@@ -631,13 +631,22 @@ class ZipWatcherApp(tk.Tk):
         table_container = ttk.Frame(events_card, style="Card.TFrame")
         table_container.pack(fill="both", expand=True, padx=14, pady=(10, 14))
         
-        # Scrollbar
+        # Scrollbars
         table_scroll = ttk.Scrollbar(table_container)
         table_scroll.pack(side="right", fill="y")
+        table_scroll_x = ttk.Scrollbar(table_container, orient="horizontal")
+        table_scroll_x.pack(side="bottom", fill="x")
         
         # Treeview
         columns = ("id", "hora", "zip", "resultado", "output")
-        self.events_tree = ttk.Treeview(table_container, columns=columns, show="headings", height=6, yscrollcommand=table_scroll.set)
+        self.events_tree = ttk.Treeview(
+            table_container,
+            columns=columns,
+            show="headings",
+            height=6,
+            yscrollcommand=table_scroll.set,
+            xscrollcommand=table_scroll_x.set,
+        )
         
         self.events_tree.heading("id", text="ID")
         self.events_tree.heading("hora", text="Hora")
@@ -653,6 +662,7 @@ class ZipWatcherApp(tk.Tk):
         
         self.events_tree.pack(side="left", fill="both", expand=True)
         table_scroll.config(command=self.events_tree.yview)
+        table_scroll_x.config(command=self.events_tree.xview)
         
         # Doble click para abrir carpeta
         self.events_tree.bind("<Double-Button-1>", self._on_event_double_click)
