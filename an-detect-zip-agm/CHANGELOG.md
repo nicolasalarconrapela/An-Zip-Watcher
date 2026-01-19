@@ -1,82 +1,93 @@
 # Changelog
 
-All notable changes to the AN-DETECT-ZIP-AGM project will be documented in this file.
+Todos los cambios relevantes de este repositorio se documentarán en este archivo.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/)
+y este proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
-## [2.1.8] - 2026-01-18
-
-### Fixed
-- Scroll horizontal activo incluso sin iniciar el watcher, ampliando anchos mínimos de columnas.
-
-## [2.1.7] - 2026-01-18
+## [0.1.10] - 2026-01-18
 
 ### Fixed
-- Scroll horizontal visible al desactivar el estirado de columnas y ajustar anchos.
+- Scroll horizontal activo aun sin iniciar el watcher en la tabla de eventos procesados de `an-detect-zip-agm`.
 
-## [2.1.6] - 2026-01-18
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.8.
+
+## [0.1.9] - 2026-01-18
+
+### Fixed
+- Scroll horizontal activo en la tabla de eventos procesados de `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.7.
+
+## [0.1.8] - 2026-01-18
 
 ### Added
-- Scroll horizontal en la tabla de eventos procesados.
+- Scroll horizontal en la tabla de eventos procesados de `an-detect-zip-agm`.
 
-## [2.1.5] - 2026-01-18
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.6.
 
-### Fixed
-- Persistencia del estado de eventos en sesión y refresco al iniciar la app.
-- Registro de eventos missing/trash como entradas nuevas del histórico.
-
-## [2.1.4] - 2026-01-18
+## [0.1.7] - 2026-01-18
 
 ### Fixed
-- Actualización automática de eventos procesados ante cambios externos y acciones de mantenimiento.
-- Detección recursiva en Trash para estados de archivos movidos.
+- Persistencia del estado de eventos y refresco al iniciar la app en `an-detect-zip-agm`.
+- Registro lineal de eventos missing/trash como nuevas entradas.
 
-## [2.1.3] - 2026-01-18
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.5.
 
-### Fixed
-- Detección consistente de carpetas de limpieza y creación de Trash cuando no existe.
-
-## [2.1.2] - 2026-01-18
+## [0.1.6] - 2026-01-18
 
 ### Fixed
-- Procesamiento consistente usando la carpeta de vigilancia vigente al encolar cada ZIP.
+- Actualización automática de eventos procesados ante cambios externos y acciones de mantenimiento en `an-detect-zip-agm`.
 
-## [2.1.1] - 2026-01-18
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.4.
+
+## [0.1.5] - 2026-01-18
 
 ### Fixed
-- Parada segura de hilos en el cierre de la aplicación para evitar procesos pendientes.
+- Detección consistente de carpetas de limpieza y creación de Trash en `an-detect-zip-agm`.
 
-## [2.1.0] - 2026-01-18
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.3.
+
+## [0.1.4] - 2026-01-18
+
+### Fixed
+- Consistencia de carpeta de vigilancia al procesar ZIPs encolados en `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.2.
+
+## [0.1.3] - 2026-01-18
+
+### Fixed
+- Cierre seguro del watcher con detención explícita de hilos en `an-detect-zip-agm`.
+
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.1.
+
+## [0.1.2] - 2026-01-18
 
 ### Added
-- Cola de procesamiento para encolar ZIPs detectados antes de procesarlos.
-- Hilo dedicado para procesar ZIPs desde la cola.
+- Procesamiento en cola para los ZIPs detectados dentro del proyecto `an-detect-zip-agm`.
 
-## [1.0.0] - 2026-01-15
+### Changed
+- Bump de versión del proyecto `an-detect-zip-agm` a 2.1.0.
+
+## [0.1.1] - 2026-01-18
 
 ### Added
-- Initial release of AN-DETECT-ZIP-AGM
-- ZIP file detection and monitoring system
-- GUI interface with tkinter
-- File repacking functionality
-- Real-time event logging
-- Settings persistence (JSON-based)
-- Build automation with PyInstaller
-- Versioning system
+- Documentación base para publicación open source (licencia, contribución, seguridad y código de conducta).
+- Changelog en la raíz del repositorio.
 
-### Features
-- Watch directories for ZIP file changes
-- Extract and process ZIP files
-- Automatic file organization (extracted, output, processed, trash)
-- Event queue-based architecture
-- Configurable polling intervals
-- Max settle time for file stability checking
-- Recent events display in UI
-- Log storage with memory limits
+### Changed
+- Actualización del README principal con estructura y guías de participación.
 
-### Technical
-- Python 3.8+
-- Watchdog library integration
-- PyInstaller support for standalone executables
-- Cross-platform support (Windows, macOS, Linux)
+## [0.1.0] - 2026-01-18
+
+### Added
+- Publicación inicial del repositorio con materiales de iniciación a la shell.
