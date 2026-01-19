@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "extract_subdir": DEFAULT_EXTRACT_SUBDIR,
     "output_subdir": DEFAULT_OUTPUT_SUBDIR,
     "processed_subdir": DEFAULT_PROCESSED_SUBDIR,
+    "trash_subdir": DEFAULT_TRASH_SUBDIR,
     "poll_settle_seconds": DEFAULT_POLL_SECONDS,
     "max_settle_tries": DEFAULT_MAX_SETTLE_TRIES,
     "scan_interval_seconds": DEFAULT_SCAN_INTERVAL,
@@ -1019,7 +1020,7 @@ class ZipWatcherApp(tk.Tk):
             "output": self.settings.get("output_subdir") or "output",
             "extracted": self.settings.get("extract_subdir") or "extracted",
             "processed": self.settings.get("processed_subdir") or "processed",
-            "trash": "Trash",
+            "trash": self.settings.get("trash_subdir") or DEFAULT_TRASH_SUBDIR,
         }
         if key in subdir_map:
             return wd / subdir_map[key]
@@ -1034,7 +1035,7 @@ class ZipWatcherApp(tk.Tk):
             "extracted": wd / (self.settings.get("extract_subdir") or "extracted"),
             "output": wd / (self.settings.get("output_subdir") or "output"),
             "processed": wd / (self.settings.get("processed_subdir") or "processed"),
-            "trash": wd / "Trash",
+            "trash": wd / (self.settings.get("trash_subdir") or DEFAULT_TRASH_SUBDIR),
         }
 
     def _refresh_paths_display(self):
@@ -1333,6 +1334,8 @@ class ZipWatcherApp(tk.Tk):
             messagebox.showinfo("No existe", f"No existe el directorio:\n{src}")
             return
 
+        trash.mkdir(parents=True, exist_ok=True)
+
         items = [p for p in src.iterdir()]
         if not items:
             messagebox.showinfo("Vacío", f"No hay elementos en:\n{src}")
@@ -1363,6 +1366,8 @@ class ZipWatcherApp(tk.Tk):
         exd = self._dir("extracted")
         prd = self._dir("processed")
         assert trash is not None and outd is not None and exd is not None and prd is not None
+
+        trash.mkdir(parents=True, exist_ok=True)
 
         counts = []
         for name, d in (("output", outd), ("extracted", exd), ("processed", prd)):

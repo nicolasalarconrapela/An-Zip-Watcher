@@ -29,7 +29,7 @@ See docs/VERSION_TOOLS_GUIDE.md for complete documentation.
 
 __title__ = "An-Zip-Watcher"
 __description__ = "ZIP file detector and repacker with GUI monitoring"
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 __author__ = "AnAppWiLos"
 __license__ = "MIT"
 __status__ = "Production"  # Development, Alpha, Beta, RC, Production
@@ -37,7 +37,7 @@ __status__ = "Production"  # Development, Alpha, Beta, RC, Production
 # Version parts
 VERSION_MAJOR = 2
 VERSION_MINOR = 1
-VERSION_PATCH = 2
+VERSION_PATCH = 3
 VERSION_BUILD = None  # Set during build process
 
 
