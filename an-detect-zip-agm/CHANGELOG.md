@@ -5,6 +5,54 @@ All notable changes to the AN-DETECT-ZIP-AGM project will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.8] - 2026-01-18
+
+### Fixed
+- Scroll horizontal activo incluso sin iniciar el watcher, ampliando anchos mínimos de columnas.
+
+## [2.1.7] - 2026-01-18
+
+### Fixed
+- Scroll horizontal visible al desactivar el estirado de columnas y ajustar anchos.
+
+## [2.1.6] - 2026-01-18
+
+### Added
+- Scroll horizontal en la tabla de eventos procesados.
+
+## [2.1.5] - 2026-01-18
+
+### Fixed
+- Persistencia del estado de eventos en sesión y refresco al iniciar la app.
+- Registro de eventos missing/trash como entradas nuevas del histórico.
+
+## [2.1.4] - 2026-01-18
+
+### Fixed
+- Actualización automática de eventos procesados ante cambios externos y acciones de mantenimiento.
+- Detección recursiva en Trash para estados de archivos movidos.
+
+## [2.1.3] - 2026-01-18
+
+### Fixed
+- Detección consistente de carpetas de limpieza y creación de Trash cuando no existe.
+
+## [2.1.2] - 2026-01-18
+
+### Fixed
+- Procesamiento consistente usando la carpeta de vigilancia vigente al encolar cada ZIP.
+
+## [2.1.1] - 2026-01-18
+
+### Fixed
+- Parada segura de hilos en el cierre de la aplicación para evitar procesos pendientes.
+
+## [2.1.0] - 2026-01-18
+
+### Added
+- Cola de procesamiento para encolar ZIPs detectados antes de procesarlos.
+- Hilo dedicado para procesar ZIPs desde la cola.
+
 ## [1.0.0] - 2026-01-15
 
 ### Added

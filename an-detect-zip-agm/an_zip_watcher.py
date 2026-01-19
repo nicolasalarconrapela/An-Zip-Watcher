@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "extract_subdir": DEFAULT_EXTRACT_SUBDIR,
     "output_subdir": DEFAULT_OUTPUT_SUBDIR,
     "processed_subdir": DEFAULT_PROCESSED_SUBDIR,
+    "trash_subdir": DEFAULT_TRASH_SUBDIR,
     "poll_settle_seconds": DEFAULT_POLL_SECONDS,
     "max_settle_tries": DEFAULT_MAX_SETTLE_TRIES,
     "scan_interval_seconds": DEFAULT_SCAN_INTERVAL,
@@ -286,11 +287,18 @@ def process_zip(zip_path: Path, watch_dir: Path, settings: dict, emit: EmitFunc)
 # =========================
 
 class WatcherThread(threading.Thread):
-    def __init__(self, settings_getter: Callable[[], dict], emit: EmitFunc, stop_event: threading.Event):
+    def __init__(
+        self,
+        settings_getter: Callable[[], dict],
+        emit: EmitFunc,
+        stop_event: threading.Event,
+        zip_queue: "queue.Queue[tuple[Path, Path]]",
+    ):
         super().__init__(daemon=True)
         self.settings_getter = settings_getter
         self.emit = emit
         self.stop_event = stop_event
+        self.zip_queue = zip_queue
         self.seen: set[Tuple[str, int, int]] = set()
 
     def run(self):
@@ -330,7 +338,8 @@ class WatcherThread(threading.Thread):
                         fp = (str(p), st.st_mtime_ns, st.st_size)
                         if fp not in self.seen:
                             self.seen.add(fp)
-                            process_zip(p, watch_dir, settings, self.emit)
+                            self.zip_queue.put((p, watch_dir))
+                            self.emit("INFO", f"ZIP en cola: {p.name}")
                     except FileNotFoundError:
                         continue
                     except Exception as e:
@@ -344,6 +353,41 @@ class WatcherThread(threading.Thread):
             time.sleep(max(0.2, scan_interval))
 
         self.emit("STOP", "Watcher detenido.")
+
+
+class ZipProcessorThread(threading.Thread):
+    def __init__(
+        self,
+        settings_getter: Callable[[], dict],
+        emit: EmitFunc,
+        stop_event: threading.Event,
+        zip_queue: "queue.Queue[tuple[Path, Path]]",
+    ):
+        super().__init__(daemon=True)
+        self.settings_getter = settings_getter
+        self.emit = emit
+        self.stop_event = stop_event
+        self.zip_queue = zip_queue
+
+    def run(self):
+        self.emit("START", "Procesador de ZIP iniciado.")
+        while True:
+            if self.stop_event.is_set() and self.zip_queue.empty():
+                break
+            try:
+                zip_path, watch_dir = self.zip_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                settings = self.settings_getter()
+                process_zip(zip_path, watch_dir, settings, self.emit)
+            except Exception as e:
+                self.emit("WARN", f"Error en cola de procesamiento: {e}")
+            finally:
+                self.zip_queue.task_done()
+
+        self.emit("STOP", "Procesador de ZIP detenido.")
 
 
 # =========================
@@ -385,8 +429,10 @@ class ZipWatcherApp(tk.Tk):
         self.settings = load_settings()
 
         self._log_queue: "queue.Queue[LogEvent]" = queue.Queue()
+        self._zip_queue: "queue.Queue[tuple[Path, Path]]" = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: WatcherThread | None = None
+        self._processor: ZipProcessorThread | None = None
 
         # store para logs (LIMITADO con deque)
         self._max_log_store = int(self.settings.get("max_log_store", DEFAULT_MAX_LOG_STORE))
@@ -401,10 +447,13 @@ class ZipWatcherApp(tk.Tk):
         # Eventos procesados (tabla de actividad)
         self._event_counter = 0
         self._processed_events: deque = deque(maxlen=100)  # Últimos 100 eventos
+        self._processed_status_cache: dict[str, str] = {}
         
         # Rastreo de procesamiento de ZIP (persiste entre batches)
         self._current_processing_zip = None
         self._current_zip_output = None
+        self._last_events_refresh = 0.0
+        self._events_refresh_interval = 10.0
 
         self._build_style()
         self._build_layout()
@@ -582,13 +631,22 @@ class ZipWatcherApp(tk.Tk):
         table_container = ttk.Frame(events_card, style="Card.TFrame")
         table_container.pack(fill="both", expand=True, padx=14, pady=(10, 14))
         
-        # Scrollbar
+        # Scrollbars
         table_scroll = ttk.Scrollbar(table_container)
         table_scroll.pack(side="right", fill="y")
+        table_scroll_x = ttk.Scrollbar(table_container, orient="horizontal")
+        table_scroll_x.pack(side="bottom", fill="x")
         
         # Treeview
         columns = ("id", "hora", "zip", "resultado", "output")
-        self.events_tree = ttk.Treeview(table_container, columns=columns, show="headings", height=6, yscrollcommand=table_scroll.set)
+        self.events_tree = ttk.Treeview(
+            table_container,
+            columns=columns,
+            show="headings",
+            height=6,
+            yscrollcommand=table_scroll.set,
+            xscrollcommand=table_scroll_x.set,
+        )
         
         self.events_tree.heading("id", text="ID")
         self.events_tree.heading("hora", text="Hora")
@@ -596,14 +654,16 @@ class ZipWatcherApp(tk.Tk):
         self.events_tree.heading("resultado", text="Estado")
         self.events_tree.heading("output", text="Carpeta Salida")
         
-        self.events_tree.column("id", width=50, anchor="center")
-        self.events_tree.column("hora", width=140, anchor="w")
-        self.events_tree.column("zip", width=250, anchor="w")
-        self.events_tree.column("resultado", width=120, anchor="center")
-        self.events_tree.column("output", width=200, anchor="w")
+        self.events_tree.column("id", width=80, minwidth=80, anchor="center", stretch=False)
+        self.events_tree.column("hora", width=180, minwidth=180, anchor="w", stretch=False)
+        self.events_tree.column("zip", width=420, minwidth=420, anchor="w", stretch=False)
+        self.events_tree.column("resultado", width=160, minwidth=160, anchor="center", stretch=False)
+        self.events_tree.column("output", width=700, minwidth=700, anchor="w", stretch=False)
+        self.events_tree.configure(xscrollincrement=20)
         
         self.events_tree.pack(side="left", fill="both", expand=True)
         table_scroll.config(command=self.events_tree.yview)
+        table_scroll_x.config(command=self.events_tree.xview)
         
         # Doble click para abrir carpeta
         self.events_tree.bind("<Double-Button-1>", self._on_event_double_click)
@@ -946,7 +1006,10 @@ class ZipWatcherApp(tk.Tk):
             self.side_state_text.set("Detenido")
 
     def _is_running(self) -> bool:
-        return bool(self._worker and self._worker.is_alive())
+        return bool(
+            (self._worker and self._worker.is_alive())
+            or (self._processor and self._processor.is_alive())
+        )
 
     def settings_getter(self):
         return dict(self.settings)
@@ -971,7 +1034,7 @@ class ZipWatcherApp(tk.Tk):
             "output": self.settings.get("output_subdir") or "output",
             "extracted": self.settings.get("extract_subdir") or "extracted",
             "processed": self.settings.get("processed_subdir") or "processed",
-            "trash": "Trash",
+            "trash": self.settings.get("trash_subdir") or DEFAULT_TRASH_SUBDIR,
         }
         if key in subdir_map:
             return wd / subdir_map[key]
@@ -986,7 +1049,7 @@ class ZipWatcherApp(tk.Tk):
             "extracted": wd / (self.settings.get("extract_subdir") or "extracted"),
             "output": wd / (self.settings.get("output_subdir") or "output"),
             "processed": wd / (self.settings.get("processed_subdir") or "processed"),
-            "trash": wd / "Trash",
+            "trash": wd / (self.settings.get("trash_subdir") or DEFAULT_TRASH_SUBDIR),
         }
 
     def _refresh_paths_display(self):
@@ -1078,8 +1141,10 @@ class ZipWatcherApp(tk.Tk):
         self.save_from_form()
 
         self._stop_event.clear()
-        self._worker = WatcherThread(self.settings_getter, self.emit, self._stop_event)
+        self._worker = WatcherThread(self.settings_getter, self.emit, self._stop_event, self._zip_queue)
+        self._processor = ZipProcessorThread(self.settings_getter, self.emit, self._stop_event, self._zip_queue)
         self._worker.start()
+        self._processor.start()
 
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
@@ -1093,6 +1158,7 @@ class ZipWatcherApp(tk.Tk):
         if not self._is_running():
             return
         self._stop_event.set()
+        self._drain_zip_queue()
         self._set_status("Deteniendo…", UIStatus.STOPPING.value)
         self.btn_stop.configure(state="disabled")
         self.btn_start.configure(state="disabled")
@@ -1100,7 +1166,7 @@ class ZipWatcherApp(tk.Tk):
         self.after(150, self._join_worker)
 
     def _join_worker(self):
-        if self._worker and self._worker.is_alive():
+        if (self._worker and self._worker.is_alive()) or (self._processor and self._processor.is_alive()):
             self.after(150, self._join_worker)
             return
 
@@ -1109,6 +1175,25 @@ class ZipWatcherApp(tk.Tk):
         self._set_maintenance_enabled(True)
         self._set_status("Parado", UIStatus.IDLE.value)
         self.emit("STOP", "Watcher parado.")
+
+    def _drain_zip_queue(self):
+        drained = 0
+        try:
+            while True:
+                self._zip_queue.get_nowait()
+                self._zip_queue.task_done()
+                drained += 1
+        except queue.Empty:
+            pass
+        if drained:
+            self.emit("INFO", f"Cola de ZIPs vaciada ({drained}).")
+
+    def _shutdown_threads(self):
+        self._stop_event.set()
+        self._drain_zip_queue()
+        for thread in (self._worker, self._processor):
+            if thread and thread.is_alive():
+                thread.join(timeout=2)
 
     def _set_maintenance_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"
@@ -1263,6 +1348,8 @@ class ZipWatcherApp(tk.Tk):
             messagebox.showinfo("No existe", f"No existe el directorio:\n{src}")
             return
 
+        trash.mkdir(parents=True, exist_ok=True)
+
         items = [p for p in src.iterdir()]
         if not items:
             messagebox.showinfo("Vacío", f"No hay elementos en:\n{src}")
@@ -1277,6 +1364,7 @@ class ZipWatcherApp(tk.Tk):
         moved, total, batch_dir = self._move_dir_contents_to_trash(src, trash, which)
         self.emit("CLEAN", f"{which.upper()} limpiado: {moved}/{total} movidos a {batch_dir}")
         messagebox.showinfo("Completado", f"{which.upper()} → Trash\nMovidos {moved}/{total} a:\n{batch_dir}")
+        self._refresh_processed_events_status(show_dialog=False)
 
     def clean_all_to_trash(self):
         if self._is_running():
@@ -1293,6 +1381,8 @@ class ZipWatcherApp(tk.Tk):
         exd = self._dir("extracted")
         prd = self._dir("processed")
         assert trash is not None and outd is not None and exd is not None and prd is not None
+
+        trash.mkdir(parents=True, exist_ok=True)
 
         counts = []
         for name, d in (("output", outd), ("extracted", exd), ("processed", prd)):
@@ -1326,6 +1416,7 @@ class ZipWatcherApp(tk.Tk):
             "Limpieza total completada",
             f"Movidos {total_moved}/{total_items} elementos.\n\nDestinos:\n" + "\n".join(batches[:10]) + ("\n..." if len(batches) > 10 else "")
         )
+        self._refresh_processed_events_status(show_dialog=False)
 
     def empty_trash(self):
         if self._is_running():
@@ -1373,6 +1464,7 @@ class ZipWatcherApp(tk.Tk):
 
         self.emit("TRASH", f"Trash vaciado: {deleted}/{len(items)} eliminados definitivamente")
         messagebox.showinfo("Trash", f"Eliminados {deleted}/{len(items)} elementos de Trash.")
+        self._refresh_processed_events_status(show_dialog=False)
 
     # ========= Logs UI =========
 
@@ -1503,6 +1595,7 @@ LOG DETALLADO:
             "output": output_path
         }
         self._processed_events.append(event_data)
+        self._update_status_cache(output_path, result)
         
         # Insertar en la tabla (al inicio para mostrar los más recientes primero)
         self.events_tree.insert("", 0, values=(
@@ -1526,6 +1619,19 @@ LOG DETALLADO:
         self.events_tree.tag_configure("success", foreground="#059669")
         self.events_tree.tag_configure("warning", foreground="#d97706")
         self.events_tree.tag_configure("error", foreground="#dc2626")
+
+    def _update_status_cache(self, output_path: str, result: str) -> None:
+        if not output_path or output_path == "N/A":
+            return
+        status = None
+        if "TRASH" in result:
+            status = "TRASH"
+        elif "MISSING" in result:
+            status = "MISSING"
+        elif "✅" in result or "ÉXITO" in result.upper():
+            status = "OK"
+        if status:
+            self._processed_status_cache[output_path] = status
     
     def clear_events_table(self):
         """Limpia la tabla de eventos."""
@@ -1536,6 +1642,7 @@ LOG DETALLADO:
             self.events_tree.delete(item)
         
         self._processed_events.clear()
+        self._processed_status_cache.clear()
         self._event_counter = 0
         self.emit("INFO", "Tabla de eventos limpiada.")
     
@@ -1563,66 +1670,70 @@ LOG DETALLADO:
                 except Exception as e:
                     messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
 
-                except Exception as e:
-                    messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
-
-    def verify_missing_files(self):
-        """Verifica si los archivos de salida existen o si han sido movidos a trash/borrados."""
+    def _refresh_processed_events_status(self, show_dialog: bool) -> int:
+        """Actualiza el estado de eventos procesados (trash/missing) como histórico lineal."""
         trash_dir = self._dir("trash")
         changes_count = 0
-        
+
         for item in self.events_tree.get_children():
             values = self.events_tree.item(item, "values")
             if len(values) < 5:
                 continue
-                
+
             current_status = values[3]
             output_path = values[4]
             zip_name = values[2]
-            
+
             # Solo verificar si tiene un path válido y no ha fallado previamente
             if output_path and output_path != "N/A" and "ERROR" not in current_status:
                 path = Path(output_path)
-                
-                new_status = current_status
-                
+
+                new_status = "OK"
+
                 if not path.exists():
-                    # El archivo no está donde debería. Buscar en Trash.
+                    # El archivo no está donde debería. Buscar en Trash (recursivo).
                     is_in_trash = False
                     if trash_dir and trash_dir.exists():
-                        # Buscar por nombre de archivo en trash
-                        potential_trash_path = trash_dir / path.name
-                        if potential_trash_path.exists():
-                            is_in_trash = True
-                        else:
-                            # Intentar búsqueda más laxa en trash (por si acaso nombre cambió ligeramente)
-                            for t_file in trash_dir.iterdir():
-                                if t_file.name == path.name:
-                                    is_in_trash = True
-                                    break
-                    
+                        for t_file in trash_dir.rglob(path.name):
+                            if t_file.is_file() and t_file.name == path.name:
+                                is_in_trash = True
+                                break
+
                     if is_in_trash:
-                        new_status = "🗑️ TRASH"
-                        self.events_tree.item(item, tags=("trash",))
+                        new_status = "TRASH"
                     else:
-                        new_status = "👻 MISSING"
-                        self.events_tree.item(item, tags=("missing",))
-                
-                # Actualizar si cambió el estado
-                if new_status != current_status:
-                    new_values = list(values)
-                    new_values[3] = new_values[3] + " → " + new_status if "→" not in new_values[3] else new_status
-                    self.events_tree.item(item, values=new_values)
+                        new_status = "MISSING"
+
+                previous_status = self._processed_status_cache.get(output_path)
+                if new_status != "OK" and new_status != previous_status:
+                    label = "🗑️ TRASH" if new_status == "TRASH" else "👻 MISSING"
+                    self.add_processed_event(zip_name, label, output_path)
                     changes_count += 1
-        
-        # Configurar colores nuevos
-        self.events_tree.tag_configure("trash", foreground="#9ca3af") # Gris
-        self.events_tree.tag_configure("missing", foreground="#ef4444", font=("Segoe UI", 9, "bold")) # Rojo alerta
-        
-        if changes_count > 0:
-            messagebox.showinfo("Verificación", f"Se actualizaron {changes_count} eventos.\nAlgunos archivos han sido movidos a la papelera o eliminados.")
-        else:
-            messagebox.showinfo("Verificación", "Todos los archivos verificados están accesibles.")
+
+                self._processed_status_cache[output_path] = new_status
+
+        if show_dialog:
+            if changes_count > 0:
+                messagebox.showinfo(
+                    "Verificación",
+                    f"Se actualizaron {changes_count} eventos.\nAlgunos archivos han sido movidos a la papelera o eliminados."
+                )
+            else:
+                messagebox.showinfo("Verificación", "Todos los archivos verificados están accesibles.")
+
+        return changes_count
+
+    def _maybe_refresh_processed_events(self):
+        if not self._processed_events:
+            return
+        now = time.time()
+        if now - self._last_events_refresh >= self._events_refresh_interval:
+            self._refresh_processed_events_status(show_dialog=False)
+            self._last_events_refresh = now
+
+    def verify_missing_files(self):
+        """Verifica si los archivos de salida existen o si han sido movidos a trash/borrados."""
+        self._refresh_processed_events_status(show_dialog=True)
 
     # ========== Gestión de Sesiones ==========
     
@@ -1660,6 +1771,7 @@ LOG DETALLADO:
                 "watch_dir": self.settings.get("watch_dir", ""),
                 "event_counter": self._event_counter,
                 "events": events_data,
+                "status_cache": self._processed_status_cache,
                 "logs": logs_data,
                 "counters": {
                     "info": self._count_info,
@@ -1694,7 +1806,7 @@ LOG DETALLADO:
             self._processed_events.clear()
             for item in self.events_tree.get_children():
                 self.events_tree.delete(item)
-            
+
             for ev_data in session_data.get("events", []):
                 self._processed_events.append(ev_data)
                 self.events_tree.insert("", "end", values=(
@@ -1719,6 +1831,11 @@ LOG DETALLADO:
             self.events_tree.tag_configure("success", foreground="#059669")
             self.events_tree.tag_configure("warning", foreground="#d97706")
             self.events_tree.tag_configure("error", foreground="#dc2626")
+
+            self._processed_status_cache = session_data.get("status_cache", {})
+            if not self._processed_status_cache:
+                for ev in self._processed_events:
+                    self._update_status_cache(ev.get("output", ""), ev.get("result", ""))
             
             # Restaurar contadores
             counters = session_data.get("counters", {})
@@ -1732,6 +1849,7 @@ LOG DETALLADO:
             # Los logs se reconstruirán naturalmente con nuevos eventos
             
             self.emit("INFO", f"Sesión cargada: {session_data.get('saved_at', 'desconocida')}")
+            self._refresh_processed_events_status(show_dialog=False)
             return True
             
         except Exception as e:
@@ -1783,6 +1901,7 @@ LOG DETALLADO:
         if drained:
             self._handle_log_events_batch(drained)
 
+        self._maybe_refresh_processed_events()
         self.after(120, self._tick_logs)
 
     def _handle_log_events_batch(self, events: list[LogEvent]):
@@ -1939,7 +2058,7 @@ LOG DETALLADO:
         if self._is_running():
             if not messagebox.askyesno("Salir", "El watcher está en ejecución. ¿Parar y salir?"):
                 return
-            self._stop_event.set()
+            self._shutdown_threads()
         
         # Guardar sesión automáticamente antes de cerrar
         self.save_session()
