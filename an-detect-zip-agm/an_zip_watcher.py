@@ -654,11 +654,11 @@ class ZipWatcherApp(tk.Tk):
         self.events_tree.heading("resultado", text="Estado")
         self.events_tree.heading("output", text="Carpeta Salida")
         
-        self.events_tree.column("id", width=50, anchor="center")
-        self.events_tree.column("hora", width=140, anchor="w")
-        self.events_tree.column("zip", width=250, anchor="w")
-        self.events_tree.column("resultado", width=120, anchor="center")
-        self.events_tree.column("output", width=200, anchor="w")
+        self.events_tree.column("id", width=60, anchor="center", stretch=False)
+        self.events_tree.column("hora", width=160, anchor="w", stretch=False)
+        self.events_tree.column("zip", width=320, anchor="w", stretch=False)
+        self.events_tree.column("resultado", width=140, anchor="center", stretch=False)
+        self.events_tree.column("output", width=520, anchor="w", stretch=False)
         
         self.events_tree.pack(side="left", fill="both", expand=True)
         table_scroll.config(command=self.events_tree.yview)
