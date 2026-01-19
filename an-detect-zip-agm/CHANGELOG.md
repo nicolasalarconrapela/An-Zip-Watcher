@@ -5,6 +5,12 @@ All notable changes to the AN-DETECT-ZIP-AGM project will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] - 2026-01-18
+
+### Fixed
+- Persistencia del estado de eventos en sesión y refresco al iniciar la app.
+- Registro de eventos missing/trash como entradas nuevas del histórico.
+
 ## [2.1.4] - 2026-01-18
 
 ### Fixed

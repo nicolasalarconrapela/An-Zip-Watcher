@@ -447,6 +447,7 @@ class ZipWatcherApp(tk.Tk):
         # Eventos procesados (tabla de actividad)
         self._event_counter = 0
         self._processed_events: deque = deque(maxlen=100)  # Últimos 100 eventos
+        self._processed_status_cache: dict[str, str] = {}
         
         # Rastreo de procesamiento de ZIP (persiste entre batches)
         self._current_processing_zip = None
@@ -1583,6 +1584,7 @@ LOG DETALLADO:
             "output": output_path
         }
         self._processed_events.append(event_data)
+        self._update_status_cache(output_path, result)
         
         # Insertar en la tabla (al inicio para mostrar los más recientes primero)
         self.events_tree.insert("", 0, values=(
@@ -1606,6 +1608,19 @@ LOG DETALLADO:
         self.events_tree.tag_configure("success", foreground="#059669")
         self.events_tree.tag_configure("warning", foreground="#d97706")
         self.events_tree.tag_configure("error", foreground="#dc2626")
+
+    def _update_status_cache(self, output_path: str, result: str) -> None:
+        if not output_path or output_path == "N/A":
+            return
+        status = None
+        if "TRASH" in result:
+            status = "TRASH"
+        elif "MISSING" in result:
+            status = "MISSING"
+        elif "✅" in result or "ÉXITO" in result.upper():
+            status = "OK"
+        if status:
+            self._processed_status_cache[output_path] = status
     
     def clear_events_table(self):
         """Limpia la tabla de eventos."""
@@ -1616,6 +1631,7 @@ LOG DETALLADO:
             self.events_tree.delete(item)
         
         self._processed_events.clear()
+        self._processed_status_cache.clear()
         self._event_counter = 0
         self.emit("INFO", "Tabla de eventos limpiada.")
     
@@ -1643,11 +1659,8 @@ LOG DETALLADO:
                 except Exception as e:
                     messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
 
-                except Exception as e:
-                    messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")
-
     def _refresh_processed_events_status(self, show_dialog: bool) -> int:
-        """Actualiza el estado de eventos procesados (trash/missing)."""
+        """Actualiza el estado de eventos procesados (trash/missing) como histórico lineal."""
         trash_dir = self._dir("trash")
         changes_count = 0
 
@@ -1658,12 +1671,13 @@ LOG DETALLADO:
 
             current_status = values[3]
             output_path = values[4]
+            zip_name = values[2]
 
             # Solo verificar si tiene un path válido y no ha fallado previamente
             if output_path and output_path != "N/A" and "ERROR" not in current_status:
                 path = Path(output_path)
 
-                new_status = current_status
+                new_status = "OK"
 
                 if not path.exists():
                     # El archivo no está donde debería. Buscar en Trash (recursivo).
@@ -1675,22 +1689,17 @@ LOG DETALLADO:
                                 break
 
                     if is_in_trash:
-                        new_status = "🗑️ TRASH"
-                        self.events_tree.item(item, tags=("trash",))
+                        new_status = "TRASH"
                     else:
-                        new_status = "👻 MISSING"
-                        self.events_tree.item(item, tags=("missing",))
+                        new_status = "MISSING"
 
-                # Actualizar si cambió el estado
-                if new_status != current_status:
-                    new_values = list(values)
-                    new_values[3] = new_values[3] + " → " + new_status if "→" not in new_values[3] else new_status
-                    self.events_tree.item(item, values=new_values)
+                previous_status = self._processed_status_cache.get(output_path)
+                if new_status != "OK" and new_status != previous_status:
+                    label = "🗑️ TRASH" if new_status == "TRASH" else "👻 MISSING"
+                    self.add_processed_event(zip_name, label, output_path)
                     changes_count += 1
 
-        # Configurar colores nuevos
-        self.events_tree.tag_configure("trash", foreground="#9ca3af")  # Gris
-        self.events_tree.tag_configure("missing", foreground="#ef4444", font=("Segoe UI", 9, "bold"))  # Rojo alerta
+                self._processed_status_cache[output_path] = new_status
 
         if show_dialog:
             if changes_count > 0:
@@ -1751,6 +1760,7 @@ LOG DETALLADO:
                 "watch_dir": self.settings.get("watch_dir", ""),
                 "event_counter": self._event_counter,
                 "events": events_data,
+                "status_cache": self._processed_status_cache,
                 "logs": logs_data,
                 "counters": {
                     "info": self._count_info,
@@ -1785,7 +1795,7 @@ LOG DETALLADO:
             self._processed_events.clear()
             for item in self.events_tree.get_children():
                 self.events_tree.delete(item)
-            
+
             for ev_data in session_data.get("events", []):
                 self._processed_events.append(ev_data)
                 self.events_tree.insert("", "end", values=(
@@ -1810,6 +1820,11 @@ LOG DETALLADO:
             self.events_tree.tag_configure("success", foreground="#059669")
             self.events_tree.tag_configure("warning", foreground="#d97706")
             self.events_tree.tag_configure("error", foreground="#dc2626")
+
+            self._processed_status_cache = session_data.get("status_cache", {})
+            if not self._processed_status_cache:
+                for ev in self._processed_events:
+                    self._update_status_cache(ev.get("output", ""), ev.get("result", ""))
             
             # Restaurar contadores
             counters = session_data.get("counters", {})
@@ -1823,6 +1838,7 @@ LOG DETALLADO:
             # Los logs se reconstruirán naturalmente con nuevos eventos
             
             self.emit("INFO", f"Sesión cargada: {session_data.get('saved_at', 'desconocida')}")
+            self._refresh_processed_events_status(show_dialog=False)
             return True
             
         except Exception as e:
