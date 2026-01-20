@@ -1,0 +1,13 @@
+{
+  "watch_dir": "C:\\Users\\Developer\\Downloads\\agm_zips\\",
+  "extract_subdir": "extracted",
+  "output_subdir": "output",
+  "processed_subdir": "processed",
+  "poll_settle_seconds": 1.0,
+  "max_settle_tries": 30,
+  "scan_interval_seconds": 0.5,
+  "max_recent_events": 50,
+  "max_log_store": 5000,
+  "welcome_banner_shown": false,
+  "advanced_config_expanded": false
+}
